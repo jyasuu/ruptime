@@ -54,9 +54,3 @@ The application exposes metrics at `http://<host>:<port>/metrics` in Prometheus 
 ## License
 This project is licensed under the MIT License.
 
-
-## prompts
-
-```
-help me learning iceberg and doris and how to design use them on application and show me a full practice example
-```
