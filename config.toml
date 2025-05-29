@@ -1,0 +1,75 @@
+# Global monitoring interval in seconds
+monitoring_interval_seconds = 60 # Default is 60 if this line is omitted or AppConfig field is not Option.
+
+[[hosts]]
+address = "google.com"
+alias = "Google Search (HTTPS)"
+  [[hosts.checks]]
+  type = "Http" # Corresponds to Check::Http variant
+  port = 443
+  path = "/"
+  protocol = "Https" # Corresponds to HttpProtocol::Https
+  method = "Get"     # Corresponds to HttpMethod::Get
+  timeout_seconds = 5 # Optional, defaults to 10 for Http
+  check_ssl_certificate = true # Optional, defaults to true for Https
+  expected_status_code = 200 # Optional, defaults to 200
+  # body_regex_check = "Google" # Optional
+
+[[hosts]]
+address = "cloudflare.com" # Example of a host with multiple checks
+alias = "Cloudflare"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/"
+  protocol = "Https"
+  method = "Head" # Using HEAD request
+  timeout_seconds = 3
+  expected_status_code = 200
+
+  [[hosts.checks]]
+  type = "Tcp" # Corresponds to Check::Tcp variant
+  port = 443 # Checking TCP connectivity to HTTPS port
+  timeout_seconds = 2 # Optional, defaults to 5 for Tcp
+
+[[hosts]]
+address = "1.1.1.1"
+alias = "Cloudflare DNS (TCP only)"
+  [[hosts.checks]]
+  type = "Tcp"
+  port = 53
+  timeout_seconds = 3
+
+[[hosts]]
+address = "rust-lang.org"
+alias = "Rust Language Website (No SSL check example - if it were on a self-signed cert)"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443 # Assuming HTTPS
+  path = "/"
+  protocol = "Https"
+  method = "Get"
+  check_ssl_certificate = true # For a real site, this should be true. Set to false for specific test cases only.
+  expected_status_code = 200
+  body_regex_check = "<html" # Check if it's an HTML page
+
+[[hosts]]
+address = "thissitedoesnotexist.example.org"
+alias = "Non-existent Site (HTTP)"
+  [[hosts.checks]]
+  type = "Http"
+  port = 80
+  path = "/"
+  protocol = "Http"
+  method = "Get"
+  timeout_seconds = 2
+  expected_status_code = 404 # Or whatever is expected for a non-existent site from the server/proxy
+  # Note: a DNS resolution failure will likely occur before an HTTP 404.
+
+[[hosts]]
+address = "localhost"
+alias = "Local TCP on non-existent port"
+  [[hosts.checks]]
+  type = "Tcp"
+  port = 12345 # Unlikely to be open
+  timeout_seconds = 1
