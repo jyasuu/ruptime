@@ -7,6 +7,10 @@ use reqwest::{Client, StatusCode};
 use regex::Regex;
 use crate::config::{AppConfig, HostConfig, Check, HttpCheck, HttpProtocol, HttpMethod as ConfigHttpMethod};
 use log::{info, warn, error, debug}; // Added log macros
+use native_tls::{TlsConnector, TlsStream};
+use openssl::x509::X509;
+use std::io::{Read, Write}; // Required for TlsStream
+use std::net::TcpStream as StdTcpStream; // For native-tls
 
 // --- Data structures for storing check status ---
 
@@ -27,6 +31,8 @@ pub struct HttpCheckResultDetails {
     // This is the HttpCheckResult from the previous step
     pub status: CheckStatus,
     pub response_time_ms: u128,
+    pub cert_days_remaining: Option<i64>,
+    pub cert_is_valid: Option<bool>,
 }
 
 // This mirrors the HttpCheckResult's status for now
@@ -49,6 +55,11 @@ pub struct TargetStatus {
     // Placeholders for now
     pub uptime_percentage_24h: f32,
     pub average_response_time_24h_ms: f32,
+    pub monitor_url: String,
+    pub monitor_hostname: String,
+    pub monitor_port: u16,
+    pub cert_days_remaining: Option<i64>,
+    pub cert_is_valid: Option<bool>,
 }
 
 // Helper for serializing SystemTime option
@@ -69,7 +80,7 @@ where
 
 
 impl TargetStatus {
-    pub fn new(alias: String) -> Self { // Ensure this is public if called from main
+    pub fn new(alias: String, monitor_url: String, monitor_hostname: String, monitor_port: u16) -> Self { // Ensure this is public if called from main
         TargetStatus {
             target_alias: alias, // Make fields public if accessed directly from api.rs
             last_check_time: None, // Make fields public
@@ -78,6 +89,11 @@ impl TargetStatus {
             is_healthy: true, // Start with an optimistic state // Make fields public
             uptime_percentage_24h: 100.0, // Placeholder // Make fields public
             average_response_time_24h_ms: 0.0, // Placeholder // Make fields public
+            monitor_url,
+            monitor_hostname,
+            monitor_port,
+            cert_days_remaining: None,
+            cert_is_valid: None,
         }
     }
 }
@@ -100,6 +116,8 @@ pub struct TcpCheckResult {
 pub struct HttpCheckResultDetails {
     pub status: CheckStatus,
     pub response_time_ms: u128,
+    pub cert_days_remaining: Option<i64>,
+    pub cert_is_valid: Option<bool>,
 }
 
 
@@ -122,6 +140,8 @@ pub async fn check_tcp_port(address: &str, port: u16, request_timeout: Duration)
 pub struct HttpTargetCheckResult {
     pub status: CheckStatus, // Uses the new shared CheckStatus
     pub response_time_ms: u128,
+    pub cert_days_remaining: Option<i64>,
+    pub cert_is_valid: Option<bool>,
 }
 
 pub async fn check_http_target(
@@ -129,6 +149,8 @@ pub async fn check_http_target(
     http_check_config: &HttpCheck,
 ) -> HttpTargetCheckResult { // Changed return type
     let start_time = Instant::now();
+    let mut cert_days_remaining: Option<i64> = None;
+    let mut cert_is_valid: Option<bool> = None;
 
     let protocol_str = match http_check_config.protocol {
         HttpProtocol::Http => "http",
@@ -138,6 +160,62 @@ pub async fn check_http_target(
         "{}://{}:{}{}",
         protocol_str, address, http_check_config.port, http_check_config.path
     );
+
+    if http_check_config.protocol == HttpProtocol::Https {
+        debug!("Attempting to retrieve SSL certificate for {} on port {}", address, http_check_config.port);
+        match TlsConnector::new() {
+            Ok(connector) => {
+                let stream_result = StdTcpStream::connect(format!("{}:{}", address, http_check_config.port))
+                    .and_then(|stream| {
+                        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+                        connector.connect(address, stream)
+                    });
+
+                match stream_result {
+                    Ok(mut tls_stream) => {
+                        if let Some(cert) = tls_stream.peer_certificate().ok().flatten() {
+                            match X509::from_der(&cert.to_der().unwrap()) {
+                                Ok(x509_cert) => {
+                                    let not_after = x509_cert.not_after();
+                                    let current_time = openssl::asn1::Asn1Time::days_from_now(0).unwrap();
+                                    // Calculate days remaining
+                                    // This is a bit complex due to Asn1Time not directly exposing easy diffs.
+                                    // We'll compare timestamps.
+                                    let days_diff = not_after.diff(&current_time);
+                                    if let Ok(diff) = days_diff {
+                                         cert_days_remaining = Some(diff.days as i64);
+                                         cert_is_valid = Some(diff.days > 0);
+                                    } else {
+                                        warn!("Could not calculate certificate expiry difference for {}: {:?}", address, days_diff.err());
+                                        cert_is_valid = Some(false); // Assume invalid if calculation fails
+                                    }
+                                    debug!("SSL cert for {}: Not After: {}, Days Remaining: {:?}, Valid: {:?}",
+                                           address, not_after.to_string(), cert_days_remaining, cert_is_valid);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to parse X509 certificate for {}: {}", address, e);
+                                    cert_is_valid = Some(false);
+                                }
+                            }
+                        } else {
+                            warn!("Could not get peer certificate for {}", address);
+                            cert_is_valid = Some(false);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("TLS connection to {}:{} failed for cert check: {}", address, http_check_config.port, e);
+                        cert_is_valid = Some(false); // Cannot connect, so cert is not verifiable here
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to create TLS connector: {}", e);
+                // This is a setup error, not specific to the target's cert
+            }
+        }
+    }
+
 
     let mut client_builder = reqwest::Client::builder();
 
@@ -156,6 +234,8 @@ pub async fn check_http_target(
             return HttpTargetCheckResult {
                 status: CheckStatus::Unhealthy(format!("Failed to build HTTP client: {}", e)),
                 response_time_ms: start_time.elapsed().as_millis(),
+                cert_days_remaining,
+                cert_is_valid,
             };
         }
     };
@@ -184,6 +264,8 @@ pub async fn check_http_target(
                         response_status_code, http_check_config.expected_status_code
                     )),
                     response_time_ms,
+                    cert_days_remaining,
+                    cert_is_valid,
                 };
             }
 
@@ -198,6 +280,8 @@ pub async fn check_http_target(
                                         regex_str
                                     )),
                                     response_time_ms,
+                                    cert_days_remaining,
+                                    cert_is_valid,
                                 };
                             }
                         }
@@ -208,6 +292,8 @@ pub async fn check_http_target(
                                     e
                                 )),
                                 response_time_ms,
+                                cert_days_remaining,
+                                cert_is_valid,
                             };
                         }
                     },
@@ -218,6 +304,8 @@ pub async fn check_http_target(
                                 regex_str, e
                             )),
                             response_time_ms,
+                            cert_days_remaining,
+                            cert_is_valid,
                         };
                     }
                 }
@@ -226,6 +314,8 @@ pub async fn check_http_target(
             HttpTargetCheckResult { // Changed return type
                 status: CheckStatus::Healthy,
                 response_time_ms,
+                cert_days_remaining,
+                cert_is_valid,
             }
         }
         Err(e) => {
@@ -233,6 +323,8 @@ pub async fn check_http_target(
             HttpTargetCheckResult { // Changed return type
                 status: CheckStatus::Unhealthy(format!("Request to {} failed: {}", url, e)),
                 response_time_ms,
+                cert_days_remaining,
+                cert_is_valid,
             }
         }
     }
@@ -252,7 +344,7 @@ pub async fn run_monitoring_loop(
     );
 
     let mut initial_statuses = Vec::new();
-    for (host_index, host_config) in app_config.hosts.iter().enumerate() {
+    for (_host_index, host_config) in app_config.hosts.iter().enumerate() { // host_index not used, renamed to _
         for (check_index, check) in host_config.checks.iter().enumerate() {
             let alias = host_config.alias.clone().unwrap_or_else(|| {
                 format!(
@@ -265,7 +357,34 @@ pub async fn run_monitoring_loop(
                     check_index
                 )
             });
-            initial_statuses.push(TargetStatus::new(alias.clone()));
+
+            let monitor_hostname = host_config.address.clone();
+            let (monitor_url, monitor_port) = match check {
+                Check::Tcp(tcp_check) => (
+                    format!("tcp://{}:{}", host_config.address, tcp_check.port),
+                    tcp_check.port,
+                ),
+                Check::Http(http_check) => (
+                    format!(
+                        "{}://{}:{}{}",
+                        match http_check.protocol {
+                            HttpProtocol::Http => "http",
+                            HttpProtocol::Https => "https",
+                        },
+                        host_config.address,
+                        http_check.port,
+                        http_check.path
+                    ),
+                    http_check.port,
+                ),
+            };
+
+            initial_statuses.push(TargetStatus::new(
+                alias.clone(),
+                monitor_url,
+                monitor_hostname,
+                monitor_port,
+            ));
 
             let status_index = initial_statuses.len() - 1;
             let app_config_clone = Arc::clone(&app_config);
@@ -340,6 +459,8 @@ pub async fn run_monitoring_loop(
                             current_check_result = CheckResult::Http(HttpCheckResultDetails {
                                 status: http_result.status, // http_result.status is cloned here
                                 response_time_ms: http_result.response_time_ms,
+                                cert_days_remaining: http_result.cert_days_remaining,
+                                cert_is_valid: http_result.cert_is_valid,
                             });
                         }
                     }
@@ -351,6 +472,19 @@ pub async fn run_monitoring_loop(
                             status_entry.last_check_time = Some(SystemTime::now());
                             status_entry.last_result = Some(current_check_result.clone()); // Clone for storage
                             status_entry.is_healthy = is_healthy_check;
+
+                            // Update cert details from the check result
+                            match &current_check_result {
+                                CheckResult::Http(http_details) => {
+                                    status_entry.cert_days_remaining = http_details.cert_days_remaining;
+                                    status_entry.cert_is_valid = http_details.cert_is_valid;
+                                }
+                                CheckResult::Tcp(_) => {
+                                    // Ensure cert fields are None for TCP checks
+                                    status_entry.cert_days_remaining = None;
+                                    status_entry.cert_is_valid = None;
+                                }
+                            }
 
                             if is_healthy_check {
                                 if status_entry.consecutive_failures > 0 { // Log recovery
@@ -380,7 +514,9 @@ pub async fn run_monitoring_loop(
                                     match check_clone { Check::Http(_) => "HTTP", Check::Tcp(_) => "TCP"}
                                 );
                             }
-                            debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}", alias_clone, status_entry.is_healthy, status_entry.consecutive_failures);
+                            debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}, Cert Valid: {:?}, Cert Days: {:?}",
+                                   alias_clone, status_entry.is_healthy, status_entry.consecutive_failures,
+                                   status_entry.cert_is_valid, status_entry.cert_days_remaining);
                         }
                     }
 
