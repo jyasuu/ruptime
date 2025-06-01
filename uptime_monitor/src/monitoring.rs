@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use reqwest::{Client, StatusCode};
+use reqwest;
 use regex::Regex;
 use crate::config::{AppConfig, Check, HttpCheck, HttpProtocol, HttpMethod as ConfigHttpMethod};
 use log::{info, warn, error, debug}; // Added log macros
@@ -155,7 +155,7 @@ pub async fn check_http_target(
                     });
 
                 match stream_result {
-                    Ok(mut tls_stream) => {
+                    Ok(tls_stream) => {
                         if let Some(cert) = tls_stream.peer_certificate().ok().flatten() {
                             match X509::from_der(&cert.to_der().unwrap()) {
                                 Ok(x509_cert) => {
@@ -175,8 +175,8 @@ pub async fn check_http_target(
                                     debug!("SSL cert for {}: Not After: {}, Days Remaining: {:?}, Valid: {:?}",
                                            address, not_after.to_string(), cert_days_remaining, cert_is_valid);
                                 }
-                                Err(e) => {
-                                    warn!("Failed to parse X509 certificate for {}: {}", address, e);
+                                Err(_e) => {
+                                    warn!("Failed to parse X509 certificate for {}: {}", address, _e);
                                     cert_is_valid = Some(false);
                                 }
                             }
@@ -185,14 +185,14 @@ pub async fn check_http_target(
                             cert_is_valid = Some(false);
                         }
                     }
-                    Err(e) => {
-                        warn!("TLS connection to {}:{} failed for cert check: {}", address, http_check_config.port, e);
+                    Err(_e) => {
+                        warn!("TLS connection to {}:{} failed for cert check: {}", address, http_check_config.port, _e);
                         cert_is_valid = Some(false); // Cannot connect, so cert is not verifiable here
                     }
                 }
             }
-            Err(e) => {
-                error!("Failed to create TLS connector: {}", e);
+            Err(_e) => {
+                error!("Failed to create TLS connector: {}", _e);
                 // This is a setup error, not specific to the target's cert
             }
         }
@@ -211,10 +211,10 @@ pub async fn check_http_target(
 
     let client = match client_builder.build() {
         Ok(c) => c,
-        Err(e) => {
-            error!("Failed to build HTTP client for URL {}: {}", url, e);
+        Err(_e) => {
+            error!("Failed to build HTTP client for URL {}: {}", url, _e);
             return HttpTargetCheckResult {
-                status: CheckStatus::Unhealthy(format!("Failed to build HTTP client: {}", e)),
+                status: CheckStatus::Unhealthy(format!("Failed to build HTTP client: {}", _e)),
                 response_time_ms: start_time.elapsed().as_millis(),
                 cert_days_remaining,
                 cert_is_valid,
@@ -267,11 +267,11 @@ pub async fn check_http_target(
                                 };
                             }
                         }
-                        Err(e) => {
+                        Err(_e) => {
                             return HttpTargetCheckResult { // Changed return type
                                 status: CheckStatus::Unhealthy(format!(
                                     "Failed to read response body: {}",
-                                    e
+                                    _e
                                 )),
                                 response_time_ms,
                                 cert_days_remaining,
@@ -279,11 +279,11 @@ pub async fn check_http_target(
                             };
                         }
                     },
-                    Err(e) => {
+                    Err(_e) => {
                         return HttpTargetCheckResult { // Changed return type
                             status: CheckStatus::Unhealthy(format!(
                                 "Invalid regex pattern '{}': {}",
-                                regex_str, e
+                                regex_str, _e
                             )),
                             response_time_ms,
                             cert_days_remaining,
@@ -300,10 +300,10 @@ pub async fn check_http_target(
                 cert_is_valid,
             }
         }
-        Err(e) => {
+        Err(_e) => {
             let response_time_ms = start_time.elapsed().as_millis();
             HttpTargetCheckResult { // Changed return type
-                status: CheckStatus::Unhealthy(format!("Request to {} failed: {}", url, e)),
+                status: CheckStatus::Unhealthy(format!("Request to {} failed: {}", url, _e)),
                 response_time_ms,
                 cert_days_remaining,
                 cert_is_valid,
@@ -378,8 +378,6 @@ pub async fn run_monitoring_loop(
                 loop {
                     let interval_seconds = app_config_clone.monitoring_interval_seconds;
                     let current_check_result: CheckResult;
-                    let mut is_healthy_check = false;
-                    let mut response_time_ms: Option<u128> = None;
 
 
                     let alias_clone = alias.clone(); // Clone alias for logging within this iteration
@@ -400,19 +398,48 @@ pub async fn run_monitoring_loop(
 
                             match &result {
                                 Ok(_) => {
-                                    is_healthy_check = true;
                                     info!(
                                         "Target {} ({}) is healthy (TCP:{})",
                                         alias_clone, host_address_clone, tcp_check_config.port
                                     );
+                                    // is_healthy_check = true; // To be set directly in status_entry
                                 }
-                                Err(e) => {
-                                    is_healthy_check = false;
+                                Err(_e) => {
+                                    // is_healthy_check = false; // To be set directly in status_entry
                                     // This specific error is already part of the 'result' and will be stored.
                                     // The generic unhealthy log will cover this.
                                 }
                             }
                             current_check_result = CheckResult::Tcp(TcpCheckResult { result });
+                            // Determine health directly for TCP
+                            let is_healthy_now = matches!(current_check_result, CheckResult::Tcp(TcpCheckResult { result: Ok(_) }));
+
+                            // Update shared state for TCP
+                            {
+                                let mut statuses = shared_statuses_clone.lock().await;
+                                if let Some(status_entry) = statuses.get_mut(status_index) {
+                                    status_entry.last_check_time = Some(SystemTime::now());
+                                    status_entry.last_result = Some(current_check_result.clone());
+                                    status_entry.is_healthy = is_healthy_now;
+                                    status_entry.cert_days_remaining = None; // TCP has no certs
+                                    status_entry.cert_is_valid = None;       // TCP has no certs
+
+                                    if status_entry.is_healthy {
+                                        if status_entry.consecutive_failures > 0 {
+                                            info!("Target {} has recovered. Was unhealthy for {} checks.", alias_clone, status_entry.consecutive_failures);
+                                        }
+                                        status_entry.consecutive_failures = 0;
+                                    } else {
+                                        status_entry.consecutive_failures += 1;
+                                        let _reason_str = match &current_check_result {
+                                            CheckResult::Tcp(tcp_res) => tcp_res.result.as_ref().err().cloned().unwrap_or_else(|| "Unknown TCP error".to_string()),
+                                            _ => "Unknown error".to_string(), // Should not happen here
+                                        };
+                                        warn!("Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: TCP", alias_clone, _reason_str, status_entry.consecutive_failures);
+                                    }
+                                    debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}", alias_clone, status_entry.is_healthy, status_entry.consecutive_failures);
+                                }
+                            }
                         }
                         Check::Http(http_check_config) => {
                             let check_type_str = "HTTP";
@@ -424,81 +451,60 @@ pub async fn run_monitoring_loop(
                             let http_result =
                                 check_http_target(&host_address_clone, http_check_config).await;
 
-                            response_time_ms = Some(http_result.response_time_ms);
-                            match &http_result.status { // Borrow http_result.status
-                                CheckStatus::Healthy => {
-                                    is_healthy_check = true;
-                                    info!(
-                                        "Target {} ({}) is healthy. Response time: {}ms (HTTP)",
-                                        alias_clone, host_address_clone, http_result.response_time_ms
-                                    );
-                                }
-                                CheckStatus::Unhealthy(reason) => {
-                                    is_healthy_check = false;
-                                    // Reason will be logged by the generic unhealthy log.
-                                }
+                            let is_healthy_now = matches!(http_result.status, CheckStatus::Healthy);
+
+                            if is_healthy_now {
+                                info!(
+                                    "Target {} ({}) is healthy. Response time: {}ms (HTTP)",
+                                    alias_clone, host_address_clone, http_result.response_time_ms
+                                );
                             }
+                            // Unhealthy reason is logged later if not healthy_now
+
                             current_check_result = CheckResult::Http(HttpCheckResultDetails {
                                 status: http_result.status, // http_result.status is cloned here
                                 response_time_ms: http_result.response_time_ms,
                                 cert_days_remaining: http_result.cert_days_remaining,
                                 cert_is_valid: http_result.cert_is_valid,
                             });
-                        }
-                    }
 
-                    // Update shared state
-                    {
-                        let mut statuses = shared_statuses_clone.lock().await;
-                        if let Some(status_entry) = statuses.get_mut(status_index) {
-                            status_entry.last_check_time = Some(SystemTime::now());
-                            status_entry.last_result = Some(current_check_result.clone()); // Clone for storage
-                            status_entry.is_healthy = is_healthy_check;
+                            // Update shared state for HTTP
+                            {
+                                let mut statuses = shared_statuses_clone.lock().await;
+                                if let Some(status_entry) = statuses.get_mut(status_index) {
+                                    status_entry.last_check_time = Some(SystemTime::now());
+                                    status_entry.last_result = Some(current_check_result.clone());
+                                    status_entry.is_healthy = is_healthy_now;
 
-                            // Update cert details from the check result
-                            match &current_check_result {
-                                CheckResult::Http(http_details) => {
-                                    status_entry.cert_days_remaining = http_details.cert_days_remaining;
-                                    status_entry.cert_is_valid = http_details.cert_is_valid;
-                                }
-                                CheckResult::Tcp(_) => {
-                                    // Ensure cert fields are None for TCP checks
-                                    status_entry.cert_days_remaining = None;
-                                    status_entry.cert_is_valid = None;
+                                    match &current_check_result {
+                                        CheckResult::Http(http_details) => {
+                                            status_entry.cert_days_remaining = http_details.cert_days_remaining;
+                                            status_entry.cert_is_valid = http_details.cert_is_valid;
+                                        }
+                                        _ => {} // Should not happen here
+                                    }
+
+                                    if status_entry.is_healthy {
+                                        if status_entry.consecutive_failures > 0 {
+                                            info!("Target {} has recovered. Was unhealthy for {} checks.", alias_clone, status_entry.consecutive_failures);
+                                        }
+                                        status_entry.consecutive_failures = 0;
+                                    } else {
+                                        status_entry.consecutive_failures += 1;
+                                        let _reason_str = match &current_check_result {
+                                            CheckResult::Http(http_res_details) => match &http_res_details.status {
+                                                CheckStatus::Unhealthy(s) => s.clone(),
+                                                _ => "Unknown HTTP error".to_string(),
+                                            },
+                                            _ => "Unknown error".to_string(), // Should not happen here
+                                        };
+                                        warn!("Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: HTTP", alias_clone, _reason_str, status_entry.consecutive_failures);
+                                    }
+                                    debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}, Cert Valid: {:?}, Cert Days: {:?}",
+                                           alias_clone, status_entry.is_healthy, status_entry.consecutive_failures,
+                                           status_entry.cert_is_valid, status_entry.cert_days_remaining);
                                 }
                             }
-
-                            if is_healthy_check {
-                                if status_entry.consecutive_failures > 0 { // Log recovery
-                                    info!(
-                                        "Target {} has recovered. Was unhealthy for {} checks.",
-                                        alias_clone, status_entry.consecutive_failures
-                                    );
-                                }
-                                status_entry.consecutive_failures = 0;
-                            } else {
-                                status_entry.consecutive_failures += 1;
-                                let reason_str = match &current_check_result {
-                                    CheckResult::Tcp(tcp_res) => match &tcp_res.result {
-                                        Ok(_) => "Unknown TCP error".to_string(), // Should not happen if unhealthy
-                                        Err(s) => s.clone(),
-                                    },
-                                    CheckResult::Http(http_res_details) => match &http_res_details.status {
-                                        CheckStatus::Healthy => "Unknown HTTP error".to_string(), // Should not happen
-                                        CheckStatus::Unhealthy(s) => s.clone(),
-                                    },
-                                };
-                                warn!(
-                                    "Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: {}",
-                                    alias_clone,
-                                    reason_str,
-                                    status_entry.consecutive_failures,
-                                    match check_clone { Check::Http(_) => "HTTP", Check::Tcp(_) => "TCP"}
-                                );
-                            }
-                            debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}, Cert Valid: {:?}, Cert Days: {:?}",
-                                   alias_clone, status_entry.is_healthy, status_entry.consecutive_failures,
-                                   status_entry.cert_is_valid, status_entry.cert_days_remaining);
                         }
                     }
 
@@ -518,7 +524,7 @@ pub async fn run_monitoring_loop(
 mod tests {
     use super::*; // Import items from the parent module (monitoring)
     use crate::config::{HttpCheck, HttpProtocol, HttpMethod};
-    use reqwest::StatusCode; // We'll need this for constructing mock responses if possible
+    // use reqwest::StatusCode; // We'll need this for constructing mock responses if possible - This is unused now
 
     // Helper function to create a basic HttpCheck config for tests
     fn basic_http_check_config() -> HttpCheck {

@@ -1,5 +1,6 @@
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex; // Added tokio::sync::Mutex
 use crate::monitoring::{TargetStatus, CheckResult};
 use std::fmt::Write;
 use log::{info, error}; // Added log macros
@@ -34,7 +35,7 @@ fn escape_label_value(value: &str) -> String {
 
 #[get("/metrics")]
 async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl Responder {
-    let statuses = data.lock().unwrap(); // .unwrap() is okay for this example, but handle errors in prod
+    let statuses = data.lock().await; // Changed to .await for tokio::sync::Mutex
 
     let mut custom_metrics_output = String::new();
 
@@ -151,7 +152,7 @@ async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl
 
 pub async fn start_web_server(
     address: String,
-    shared_statuses: Arc<Mutex<Vec<TargetStatus>>>,
+    shared_statuses: Arc<Mutex<Vec<TargetStatus>>>, // This type now correctly refers to tokio::sync::Mutex due to the import change
 ) -> std::io::Result<()> {
     info!("Starting HTTP server at http://{}", address);
     HttpServer::new(move || {
@@ -205,7 +206,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_metrics_handler_empty_status_list() {
-        let statuses = Arc::new(Mutex::new(Vec::<TargetStatus>::new()));
+        let statuses = Arc::new(Mutex::new(Vec::<TargetStatus>::new())); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses);
 
         let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
@@ -270,7 +271,7 @@ mod tests {
                 None, None
             ),
         ];
-        let statuses = Arc::new(Mutex::new(statuses_vec));
+        let statuses = Arc::new(Mutex::new(statuses_vec)); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
         let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
@@ -345,7 +346,7 @@ mod tests {
                 })), None, None // TargetStatus also has None for cert fields
             ),
         ];
-        let statuses = Arc::new(Mutex::new(statuses_vec));
+        let statuses = Arc::new(Mutex::new(statuses_vec)); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
         let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
@@ -378,7 +379,7 @@ mod tests {
                 })), None, None
             ),
         ];
-        let statuses = Arc::new(Mutex::new(statuses_vec));
+        let statuses = Arc::new(Mutex::new(statuses_vec)); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
         let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
