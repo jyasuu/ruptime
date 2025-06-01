@@ -1,0 +1,7 @@
+tasks:
+  - init: |
+        rustup update 1.86.0
+        rustup default 1.86.0
+    command: |
+        rustup update 1.86.0
+        rustup default 1.86.0
