@@ -1,5 +1,5 @@
 # Global monitoring interval in seconds
-monitoring_interval_seconds = 60 # Default is 60 if this line is omitted or AppConfig field is not Option.
+monitoring_interval_seconds = 1 # Default is 60 if this line is omitted or AppConfig field is not Option.
 
 [[hosts]]
 address = "google.com"
