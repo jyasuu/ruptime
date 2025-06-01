@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
-use uptime_monitor::config;
-use uptime_monitor::monitoring::{self, TargetStatus};
-use uptime_monitor::api;
+use crate::config;
+use crate::monitoring::{self, TargetStatus};
+use crate::api;
 use std::process;
-use log::{info, error, warn}; // Added log macros
+use log::{info, error}; // Added log macros
 
 mod config;
 mod monitoring;

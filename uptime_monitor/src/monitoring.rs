@@ -5,28 +5,30 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use reqwest::{Client, StatusCode};
 use regex::Regex;
-use crate::config::{AppConfig, HostConfig, Check, HttpCheck, HttpProtocol, HttpMethod as ConfigHttpMethod};
+use crate::config::{AppConfig, Check, HttpCheck, HttpProtocol, HttpMethod as ConfigHttpMethod};
 use log::{info, warn, error, debug}; // Added log macros
-use native_tls::{TlsConnector, TlsStream};
+use native_tls::TlsConnector;
 use openssl::x509::X509;
-use std::io::{Read, Write}; // Required for TlsStream
+// std::io::{Read, Write} was removed as Read and Write are unused.
+// std::io::Error and std::io::ErrorKind are used via full path.
 use std::net::TcpStream as StdTcpStream; // For native-tls
+use chrono::{DateTime, Utc};
 
 // --- Data structures for storing check status ---
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum CheckResult {
     Tcp(TcpCheckResult),
     Http(HttpCheckResultDetails),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TcpCheckResult {
     // Using Result<(), String> directly for simplicity as per current check_tcp_port
     pub result: Result<(), String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct HttpCheckResultDetails {
     // This is the HttpCheckResult from the previous step
     pub status: CheckStatus,
@@ -71,7 +73,7 @@ where
     if let Some(t) = time {
         // Format SystemTime as a string. This is a basic example.
         // You might want a more standard format like RFC3339.
-        let datetime: chrono::DateTime<chrono::Utc> = (*t).into();
+        let datetime: DateTime<Utc> = (*t).into();
         datetime.to_rfc3339().serialize(serializer)
     } else {
         serializer.serialize_none()
@@ -100,27 +102,6 @@ impl TargetStatus {
 
 
 // --- Check implementations (from previous steps, potentially with slight adjustments) ---
-// Make sure CheckResult and its variants also derive Serialize
-#[derive(Debug, Clone, serde::Serialize)]
-pub enum CheckResult {
-    Tcp(TcpCheckResult),
-    Http(HttpCheckResultDetails),
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TcpCheckResult {
-    pub result: Result<(), String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct HttpCheckResultDetails {
-    pub status: CheckStatus,
-    pub response_time_ms: u128,
-    pub cert_days_remaining: Option<i64>,
-    pub cert_is_valid: Option<bool>,
-}
-
-
 pub async fn check_tcp_port(address: &str, port: u16, request_timeout: Duration) -> Result<(), String> {
     let target = format!("{}:{}", address, port);
 
@@ -170,6 +151,7 @@ pub async fn check_http_target(
                         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
                         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                         connector.connect(address, stream)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("TLS handshake error: {}", e)))
                     });
 
                 match stream_result {

@@ -289,7 +289,7 @@ fn default_expected_status_code() -> u16 {
     200
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum HttpProtocol {
     Http,
     Https,

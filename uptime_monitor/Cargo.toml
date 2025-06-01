@@ -17,6 +17,7 @@ env_logger = "0.11.0" # Pinned
 native-tls = "0.2"
 openssl = "0.10"
 prometheus = { version = "0.13.0", features = ["process"] } # Pinned to an older patch
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3" # Already added from previous step, ensure it's here
