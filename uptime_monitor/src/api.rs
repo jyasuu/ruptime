@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use crate::monitoring::{TargetStatus, CheckResult};
 use std::fmt::Write;
 use log::{info, error}; // Added log macros
-use prometheus::{Encoder, TextEncoder, Registry, gather};
+use prometheus::{Encoder, TextEncoder, Registry};
 use prometheus::process_collector::ProcessCollector;
 
 const CONTENT_TYPE_PROMETHEUS: &str = "text/plain; version=0.0.4; charset=utf-8";
