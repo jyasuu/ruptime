@@ -208,8 +208,10 @@ mod tests {
         let statuses = Arc::new(Mutex::new(Vec::<TargetStatus>::new()));
         let data = web::Data::new(statuses);
 
-        // Directly calling the handler as it's an async function
-        let resp = metrics_handler(data).await;
+        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let req = actix_test::TestRequest::get().uri("/metrics").to_request();
+        let resp = actix_test::call_service(&app, req).await;
+
         let body_bytes = to_bytes(resp.into_body()).await.unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
@@ -269,9 +271,12 @@ mod tests {
             ),
         ];
         let statuses = Arc::new(Mutex::new(statuses_vec));
-        let data = web::Data::new(statuses);
+        let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
-        let resp = metrics_handler(data).await;
+        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let req = actix_test::TestRequest::get().uri("/metrics").to_request();
+        let resp = actix_test::call_service(&app, req).await;
+
         let body_bytes = to_bytes(resp.into_body()).await.unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
@@ -341,9 +346,12 @@ mod tests {
             ),
         ];
         let statuses = Arc::new(Mutex::new(statuses_vec));
-        let data = web::Data::new(statuses);
+        let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
-        let resp = metrics_handler(data).await;
+        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let req = actix_test::TestRequest::get().uri("/metrics").to_request();
+        let resp = actix_test::call_service(&app, req).await;
+
         let body_bytes = to_bytes(resp.into_body()).await.unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
@@ -371,9 +379,12 @@ mod tests {
             ),
         ];
         let statuses = Arc::new(Mutex::new(statuses_vec));
-        let data = web::Data::new(statuses);
+        let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
-        let resp = metrics_handler(data).await;
+        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let req = actix_test::TestRequest::get().uri("/metrics").to_request();
+        let resp = actix_test::call_service(&app, req).await;
+
         let body_bytes = to_bytes(resp.into_body()).await.unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
