@@ -1,13 +1,13 @@
-use std::sync::{Arc, Mutex};
-use crate::config;
-use crate::monitoring::{self, TargetStatus};
-use crate::api;
-use std::process;
-use log::{info, error}; // Added log macros
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 mod config;
 mod monitoring;
 mod api;
+
+use crate::monitoring::TargetStatus;
+use std::process;
+use log::{info, error}; // Added log macros
 
 const DEFAULT_CONFIG_FILE_PATH: &str = "config.toml";
 const DEFAULT_SERVER_ADDRESS: &str = "0.0.0.0:8080";
@@ -48,7 +48,7 @@ pub async fn run_app() -> std::io::Result<()> {
     };
 
     let app_config = Arc::new(loaded_config);
-    let shared_target_statuses: Arc<Mutex<Vec<TargetStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let shared_target_statuses: Arc<tokio::sync::Mutex<Vec<TargetStatus>>> = Arc::new(Mutex::new(Vec::new()));
 
     let app_config_clone = Arc::clone(&app_config);
     let statuses_clone_monitor = Arc::clone(&shared_target_statuses);
