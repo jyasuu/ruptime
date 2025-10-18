@@ -7,8 +7,7 @@ use reqwest;
 use regex::Regex;
 use crate::config::{AppConfig, Check, HttpCheck, HttpProtocol, HttpMethod as ConfigHttpMethod, AuthConfig, HttpAssertion, AssertionQuery, AssertionPredicate, AssertionValue, CertificateField};
 use log::{info, warn, error, debug}; // Added log macros
-use native_tls::TlsConnector;
-use openssl::x509::X509;
+// Removed unused imports - using openssl::ssl directly
 // std::io::{Read, Write} was removed as Read and Write are unused.
 // std::io::Error and std::io::ErrorKind are used via full path.
 use std::net::TcpStream as StdTcpStream; // For native-tls
@@ -653,22 +652,27 @@ pub async fn check_http_target(
     );
 
     if http_check_config.protocol == HttpProtocol::Https {
-        debug!("Attempting to retrieve SSL certificate for {} on port {}", address, http_check_config.port);
-        match TlsConnector::new() {
-            Ok(connector) => {
+        info!("Attempting to retrieve SSL certificate for {} on port {}", address, http_check_config.port);
+        // Use OpenSSL directly for more reliable certificate extraction
+        match openssl::ssl::SslConnector::builder(openssl::ssl::SslMethod::tls()) {
+            Ok(mut builder) => {
+                // Set up SSL connector with verification disabled for certificate extraction
+                builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
+                let connector = builder.build();
+                
                 let stream_result = StdTcpStream::connect(format!("{}:{}", address, http_check_config.port))
                     .and_then(|stream| {
                         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
                         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                         connector.connect(address, stream)
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("TLS handshake error: {}", e)))
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("SSL handshake error: {}", e)))
                     });
 
                 match stream_result {
-                    Ok(tls_stream) => {
-                        if let Some(cert) = tls_stream.peer_certificate().ok().flatten() {
-                            match X509::from_der(&cert.to_der().unwrap_or_default()) {
-                                Ok(x509_cert) => {
+                    Ok(ssl_stream) => {
+                        if let Some(x509_cert) = ssl_stream.ssl().peer_certificate() {
+                            // OpenSSL peer_certificate() already returns an X509 certificate
+                            {
                                     let not_after = x509_cert.not_after();
                                     let current_time = openssl::asn1::Asn1Time::days_from_now(0).unwrap();
                                     // Calculate days remaining
@@ -677,10 +681,10 @@ pub async fn check_http_target(
                                     let days_diff = not_after.diff(&current_time);
                                     match days_diff {
                                         Ok(diff) => {
-                                             cert_days_remaining = Some(diff.days as i64);
-                                             cert_is_valid = Some(diff.days > 0);
+                                             cert_days_remaining = Some(-diff.days as i64);
+                                             cert_is_valid = Some(-diff.days > 0);
                                              info!("SSL cert for {}: Days Remaining: {}, Valid: {}", 
-                                                   address, diff.days, diff.days > 0);
+                                                   address, -diff.days, -diff.days > 0);
                                         }
                                         Err(e) => {
                                             warn!("Could not calculate certificate expiry difference for {}: {:?}", address, e);
@@ -705,26 +709,23 @@ pub async fn check_http_target(
                                             }
                                         }
                                     }
-                                }
-                                Err(_e) => {
-                                    warn!("Failed to parse X509 certificate for {}: {}", address, _e);
-                                    cert_is_valid = Some(false);
-                                }
                             }
                         } else {
-                            warn!("Could not get peer certificate for {}", address);
+                            warn!("Could not get peer certificate for {} - no certificate returned by peer", address);
                             cert_is_valid = Some(false);
                         }
                     }
                     Err(_e) => {
                         warn!("TLS connection to {}:{} failed for cert check: {}", address, http_check_config.port, _e);
+                        info!("Will still attempt HTTP request with relaxed SSL validation for connectivity check");
                         cert_is_valid = Some(false); // Cannot connect, so cert is not verifiable here
                     }
                 }
             }
             Err(_e) => {
-                error!("Failed to create TLS connector: {}", _e);
+                error!("Failed to create SSL connector: {}", _e);
                 // This is a setup error, not specific to the target's cert
+                cert_is_valid = Some(false);
             }
         }
     }
