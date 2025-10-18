@@ -7,6 +7,10 @@ pub struct AppConfig {
     pub hosts: Vec<HostConfig>,
     #[serde(default = "default_monitoring_interval")]
     pub monitoring_interval_seconds: u64,
+    #[serde(default = "default_memory_cleanup_interval")]
+    pub memory_cleanup_interval_minutes: u64,
+    #[serde(default = "default_keep_history_hours")]
+    pub keep_history_hours: u64,
 }
 
 use log::error; // Added log macro
@@ -31,6 +35,14 @@ pub fn load_config(file_path: &str) -> Result<AppConfig, Box<dyn Error>> {
 
 fn default_monitoring_interval() -> u64 {
     60
+}
+
+fn default_memory_cleanup_interval() -> u64 {
+    60 // Clean up every hour
+}
+
+fn default_keep_history_hours() -> u64 {
+    24 // Keep 24 hours of history
 }
 
 #[cfg(test)]
@@ -275,6 +287,8 @@ pub struct HttpCheck {
     #[serde(default = "default_expected_status_code")]
     pub expected_status_code: u16,
     pub body_regex_check: Option<String>,
+    pub auth: Option<AuthConfig>, // Authentication configuration
+    pub headers: Option<std::collections::HashMap<String, String>>, // Custom headers
 }
 
 fn default_http_timeout() -> u64 {
@@ -303,4 +317,11 @@ pub enum HttpMethod {
     Put,
     Delete,
     Options,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum AuthConfig {
+    Basic { username: String, password: String },
+    OAuth2 { client_id: String, client_secret: String, token_url: String },
+    Bearer { token: String },
 }

@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use reqwest;
 use regex::Regex;
-use crate::config::{AppConfig, Check, HttpCheck, HttpProtocol, HttpMethod as ConfigHttpMethod};
+use crate::config::{AppConfig, Check, HttpCheck, HttpProtocol, HttpMethod as ConfigHttpMethod, AuthConfig};
 use log::{info, warn, error, debug}; // Added log macros
 use native_tls::TlsConnector;
 use openssl::x509::X509;
@@ -13,6 +13,7 @@ use openssl::x509::X509;
 // std::io::Error and std::io::ErrorKind are used via full path.
 use std::net::TcpStream as StdTcpStream; // For native-tls
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 // --- Data structures for storing check status ---
 
@@ -54,7 +55,7 @@ pub struct TargetStatus {
     pub last_result: Option<CheckResult>, // CheckResult needs to be Serialize
     pub consecutive_failures: u32,
     pub is_healthy: bool,
-    // Placeholders for now
+    // Calculated metrics
     pub uptime_percentage_24h: f32,
     pub average_response_time_24h_ms: f32,
     pub monitor_url: String,
@@ -62,6 +63,17 @@ pub struct TargetStatus {
     pub monitor_port: u16,
     pub cert_days_remaining: Option<i64>,
     pub cert_is_valid: Option<bool>,
+    // Historical data (kept in memory)
+    #[serde(skip)]
+    pub check_history: Vec<HistoricalCheckResult>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HistoricalCheckResult {
+    pub timestamp: SystemTime,
+    pub is_healthy: bool,
+    pub response_time_ms: Option<u128>,
+    pub error_message: Option<String>,
 }
 
 // Helper for serializing SystemTime option
@@ -89,14 +101,118 @@ impl TargetStatus {
             last_result: None, // Make fields public
             consecutive_failures: 0, // Make fields public
             is_healthy: true, // Start with an optimistic state // Make fields public
-            uptime_percentage_24h: 100.0, // Placeholder // Make fields public
-            average_response_time_24h_ms: 0.0, // Placeholder // Make fields public
+            uptime_percentage_24h: 100.0, // Will be calculated from history // Make fields public
+            average_response_time_24h_ms: 0.0, // Will be calculated from history // Make fields public
             monitor_url,
             monitor_hostname,
             monitor_port,
             cert_days_remaining: None,
             cert_is_valid: None,
+            check_history: Vec::new(),
         }
+    }
+
+    // Update historical data and calculate metrics
+    pub fn add_check_result(&mut self, is_healthy: bool, response_time_ms: Option<u128>, error_message: Option<String>) {
+        let now = SystemTime::now();
+        
+        // Add new result to history
+        self.check_history.push(HistoricalCheckResult {
+            timestamp: now,
+            is_healthy,
+            response_time_ms,
+            error_message,
+        });
+
+        // Clean up old history (keep only data within keep_history_hours)
+        let cutoff_time = now - Duration::from_secs(24 * 3600); // 24 hours for now, should be configurable
+        self.check_history.retain(|result| result.timestamp > cutoff_time);
+
+        // Calculate 24h metrics
+        self.calculate_24h_metrics();
+    }
+
+    fn calculate_24h_metrics(&mut self) {
+        if self.check_history.is_empty() {
+            self.uptime_percentage_24h = 100.0;
+            self.average_response_time_24h_ms = 0.0;
+            return;
+        }
+
+        let healthy_count = self.check_history.iter().filter(|r| r.is_healthy).count();
+        self.uptime_percentage_24h = (healthy_count as f32 / self.check_history.len() as f32) * 100.0;
+
+        let response_times: Vec<u128> = self.check_history
+            .iter()
+            .filter_map(|r| r.response_time_ms)
+            .collect();
+        
+        if !response_times.is_empty() {
+            let sum: u128 = response_times.iter().sum();
+            self.average_response_time_24h_ms = sum as f32 / response_times.len() as f32;
+        } else {
+            self.average_response_time_24h_ms = 0.0;
+        }
+    }
+}
+
+// OAuth2 token cache and management
+static mut OAUTH2_TOKEN_CACHE: Option<HashMap<String, (String, SystemTime)>> = None;
+static OAUTH2_CACHE_INIT: std::sync::Once = std::sync::Once::new();
+
+fn get_oauth2_cache() -> &'static mut HashMap<String, (String, SystemTime)> {
+    unsafe {
+        OAUTH2_CACHE_INIT.call_once(|| {
+            OAUTH2_TOKEN_CACHE = Some(HashMap::new());
+        });
+        OAUTH2_TOKEN_CACHE.as_mut().unwrap()
+    }
+}
+
+// Function to get OAuth2 access token
+async fn get_oauth2_token(client_id: &str, client_secret: &str, token_url: &str) -> Result<String, String> {
+    let cache_key = format!("{}:{}", client_id, token_url);
+    let cache = get_oauth2_cache();
+    
+    // Check if we have a valid cached token (valid for 1 hour)
+    if let Some((token, timestamp)) = cache.get(&cache_key) {
+        if timestamp.elapsed().unwrap_or(Duration::from_secs(3600)).as_secs() < 3500 { // 58 minutes
+            return Ok(token.clone());
+        }
+    }
+    
+    // Request new token
+    let client = reqwest::Client::new();
+    let params = [
+        ("grant_type", "client_credentials"),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+    ];
+    
+    match client.post(token_url)
+        .form(&params)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.json::<serde_json::Value>().await {
+                    Ok(json) => {
+                        if let Some(access_token) = json.get("access_token").and_then(|v| v.as_str()) {
+                            // Cache the token
+                            cache.insert(cache_key, (access_token.to_string(), SystemTime::now()));
+                            Ok(access_token.to_string())
+                        } else {
+                            Err("No access_token in OAuth2 response".to_string())
+                        }
+                    }
+                    Err(e) => Err(format!("Failed to parse OAuth2 response: {}", e))
+                }
+            } else {
+                Err(format!("OAuth2 token request failed with status: {}", response.status()))
+            }
+        }
+        Err(e) => Err(format!("OAuth2 token request failed: {}", e))
     }
 }
 
@@ -232,7 +348,40 @@ pub async fn check_http_target(
     };
 
     let request_timeout_duration = Duration::from_secs(http_check_config.timeout_seconds);
-    let request_builder = client.request(method, &url).timeout(request_timeout_duration);
+    let mut request_builder = client.request(method, &url).timeout(request_timeout_duration);
+
+    // Add custom headers if configured
+    if let Some(headers) = &http_check_config.headers {
+        for (key, value) in headers {
+            request_builder = request_builder.header(key, value);
+        }
+    }
+
+    // Add authentication if configured
+    if let Some(auth) = &http_check_config.auth {
+        request_builder = match auth {
+            AuthConfig::Basic { username, password } => {
+                request_builder.basic_auth(username, Some(password))
+            }
+            AuthConfig::Bearer { token } => {
+                request_builder.bearer_auth(token)
+            }
+            AuthConfig::OAuth2 { client_id, client_secret, token_url } => {
+                // For OAuth2, we need to first get an access token
+                match get_oauth2_token(client_id, client_secret, token_url).await {
+                    Ok(access_token) => request_builder.bearer_auth(access_token),
+                    Err(e) => {
+                        return HttpTargetCheckResult {
+                            status: CheckStatus::Unhealthy(format!("OAuth2 authentication failed: {}", e)),
+                            response_time_ms: start_time.elapsed().as_millis(),
+                            cert_days_remaining,
+                            cert_is_valid,
+                        };
+                    }
+                }
+            }
+        };
+    }
 
     match request_builder.send().await {
         Ok(response) => {
@@ -424,6 +573,17 @@ pub async fn run_monitoring_loop(
                                     status_entry.cert_days_remaining = None; // TCP has no certs
                                     status_entry.cert_is_valid = None;       // TCP has no certs
 
+                                    // Add to historical data
+                                    let error_message = if !is_healthy_now {
+                                        match &current_check_result {
+                                            CheckResult::Tcp(tcp_res) => tcp_res.result.as_ref().err().cloned(),
+                                            _ => None,
+                                        }
+                                    } else {
+                                        None
+                                    };
+                                    status_entry.add_check_result(is_healthy_now, None, error_message);
+
                                     if status_entry.is_healthy {
                                         if status_entry.consecutive_failures > 0 {
                                             info!("Target {} has recovered. Was unhealthy for {} checks.", alias_clone, status_entry.consecutive_failures);
@@ -476,13 +636,25 @@ pub async fn run_monitoring_loop(
                                     status_entry.last_result = Some(current_check_result.clone());
                                     status_entry.is_healthy = is_healthy_now;
 
-                                    match &current_check_result {
+                                    let (response_time, error_message) = match &current_check_result {
                                         CheckResult::Http(http_details) => {
                                             status_entry.cert_days_remaining = http_details.cert_days_remaining;
                                             status_entry.cert_is_valid = http_details.cert_is_valid;
+                                            let error = if !is_healthy_now {
+                                                match &http_details.status {
+                                                    CheckStatus::Unhealthy(s) => Some(s.clone()),
+                                                    _ => None,
+                                                }
+                                            } else {
+                                                None
+                                            };
+                                            (Some(http_details.response_time_ms), error)
                                         }
-                                        _ => {} // Should not happen here
-                                    }
+                                        _ => (None, None) // Should not happen here
+                                    };
+
+                                    // Add to historical data
+                                    status_entry.add_check_result(is_healthy_now, response_time, error_message);
 
                                     if status_entry.is_healthy {
                                         if status_entry.consecutive_failures > 0 {
@@ -537,6 +709,8 @@ mod tests {
             check_ssl_certificate: true,
             expected_status_code: 200,
             body_regex_check: None,
+            auth: None,
+            headers: None,
         }
     }
 

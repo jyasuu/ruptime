@@ -201,6 +201,7 @@ mod tests {
             monitor_port,
             cert_days_remaining: cert_days,
             cert_is_valid: cert_valid,
+            check_history: Vec::new(),
         }
     }
 

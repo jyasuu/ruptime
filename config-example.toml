@@ -1,0 +1,146 @@
+# Uptime Monitor Configuration Example
+# This file demonstrates all available configuration options
+
+# Global monitoring interval in seconds (default: 60)
+monitoring_interval_seconds = 30
+
+# Memory cleanup interval in minutes (default: 60)
+memory_cleanup_interval_minutes = 30
+
+# How many hours of history to keep in memory (default: 24)
+keep_history_hours = 48
+
+# Basic HTTP monitoring with SSL certificate check
+[[hosts]]
+address = "google.com"
+alias = "Google Search"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  check_ssl_certificate = true
+  expected_status_code = 200
+
+# HTTP monitoring with basic authentication
+[[hosts]]
+address = "protected.example.com"
+alias = "Protected API"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/api/health"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 15
+  expected_status_code = 200
+  body_regex_check = "status.*ok"
+  
+  # Basic authentication
+  [hosts.checks.auth]
+  Basic = { username = "monitor", password = "secret123" }
+  
+  # Custom headers
+  [hosts.checks.headers]
+  "User-Agent" = "Uptime-Monitor/1.0"
+  "X-API-Key" = "monitoring-key-123"
+
+# HTTP monitoring with OAuth2 authentication
+[[hosts]]
+address = "oauth-api.example.com"
+alias = "OAuth2 Protected API"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/v1/status"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 20
+  expected_status_code = 200
+  
+  # OAuth2 authentication
+  [hosts.checks.auth]
+  OAuth2 = { 
+    client_id = "monitor-client", 
+    client_secret = "client-secret-456", 
+    token_url = "https://oauth-api.example.com/oauth/token" 
+  }
+
+# HTTP monitoring with Bearer token
+[[hosts]]
+address = "api.example.com"
+alias = "Bearer Token API"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/health"
+  protocol = "Https"
+  method = "Head"
+  timeout_seconds = 5
+  expected_status_code = 200
+  
+  # Bearer token authentication
+  [hosts.checks.auth]
+  Bearer = { token = "bearer-token-789" }
+
+# TCP port monitoring
+[[hosts]]
+address = "database.example.com"
+alias = "Database Server"
+  [[hosts.checks]]
+  type = "Tcp"
+  port = 5432
+  timeout_seconds = 3
+
+# Multiple checks for the same host
+[[hosts]]
+address = "web.example.com"
+alias = "Web Server"
+  # HTTP check
+  [[hosts.checks]]
+  type = "Http"
+  port = 80
+  path = "/"
+  protocol = "Http"
+  method = "Get"
+  timeout_seconds = 10
+  expected_status_code = 200
+  body_regex_check = "<title>.*Welcome.*</title>"
+  
+  # HTTPS check with SSL verification
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  check_ssl_certificate = true
+  expected_status_code = 200
+  
+  # SSH port check
+  [[hosts.checks]]
+  type = "Tcp"
+  port = 22
+  timeout_seconds = 5
+
+# Monitoring with custom headers but no authentication
+[[hosts]]
+address = "api-no-auth.example.com"
+alias = "Public API with Headers"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/public/status"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 8
+  expected_status_code = 200
+  
+  # Custom headers only
+  [hosts.checks.headers]
+  "Accept" = "application/json"
+  "User-Agent" = "UptimeMonitor/1.0"
+  "X-Monitoring" = "true"
