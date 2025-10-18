@@ -1,10 +1,9 @@
 use uptime_monitor::config::*;
-use uptime_monitor::monitoring::*;
 use uptime_monitor::test_utils::*;
 use reqwest;
-use serde_json::json;
 
-// Mock response for testing
+// Mock response for testing (unused but kept for reference)
+#[allow(dead_code)]
 fn create_mock_response() -> reqwest::Response {
     // This is a simplified mock - in real tests you might use a mock server
     // For now, we'll test the assertion logic directly
@@ -19,7 +18,7 @@ async fn test_status_assertion() {
         AssertionValue::Integer(200),
     );
     
-    let response_body = create_mock_response_body();
+    let _response_body = create_mock_response_body();
     
     // Create a mock response with status 200
     // Note: This would need a proper mock in real implementation
@@ -42,12 +41,12 @@ fn test_jsonpath_assertions() {
     // Test extracting test_param
     let results = jsonpath_lib::select(&json, "$.args.test_param").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0], serde_json::Value::String("hello".to_string()));
+    assert_eq!(*results[0], serde_json::Value::String("hello".to_string()));
     
     // Test number extraction
     let results = jsonpath_lib::select(&json, "$.args.number").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0], serde_json::Value::String("42".to_string()));
+    assert_eq!(*results[0], serde_json::Value::String("42".to_string()));
     
     // Test URL extraction
     let results = jsonpath_lib::select(&json, "$.url").unwrap();
@@ -194,9 +193,9 @@ fn test_complex_assertion_combinations() {
     for assertion in assertions {
         match &assertion.query {
             AssertionQuery::JsonPath { path } => {
-                let results = jsonpath_lib::select(&json, path).unwrap();
+                let results = jsonpath_lib::select(&json, &path).unwrap();
                 if !results.is_empty() {
-                    let actual = &results[0];
+                    let actual = results[0];
                     assert!(evaluate_predicate(&assertion.predicate, actual, &assertion.value));
                 }
             },
@@ -263,7 +262,7 @@ async fn test_httpbin_integration() {
     
     // Test assertions against real response
     let test_param = jsonpath_lib::select(&json, "$.args.test").unwrap();
-    assert_eq!(test_param[0], serde_json::Value::String("hello".to_string()));
+    assert_eq!(*test_param[0], serde_json::Value::String("hello".to_string()));
     
     let url = jsonpath_lib::select(&json, "$.url").unwrap();
     assert!(url[0].as_str().unwrap().contains("httpbin.org"));
@@ -289,10 +288,10 @@ async fn test_httpbin_auth_integration() {
     
     // Test authentication assertions
     let authenticated = jsonpath_lib::select(&json, "$.authenticated").unwrap();
-    assert_eq!(authenticated[0], serde_json::Value::Bool(true));
+    assert_eq!(*authenticated[0], serde_json::Value::Bool(true));
     
     let user = jsonpath_lib::select(&json, "$.user").unwrap();
-    assert_eq!(user[0], serde_json::Value::String("testuser".to_string()));
+    assert_eq!(*user[0], serde_json::Value::String("testuser".to_string()));
 }
 
 // Import the functions we're testing
