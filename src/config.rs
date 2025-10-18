@@ -48,7 +48,7 @@ fn default_keep_history_hours() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::config::*;
-    use std::fs::{self, File};
+    use std::fs;
     use std::io::Write;
     use tempfile::NamedTempFile; // Using tempfile for easier management
 
@@ -289,6 +289,7 @@ pub struct HttpCheck {
     pub body_regex_check: Option<String>,
     pub auth: Option<AuthConfig>, // Authentication configuration
     pub headers: Option<std::collections::HashMap<String, String>>, // Custom headers
+    pub assertions: Option<Vec<HttpAssertion>>, // HTTP response assertions
 }
 
 fn default_http_timeout() -> u64 {
@@ -309,7 +310,7 @@ pub enum HttpProtocol {
     Https,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum HttpMethod {
     Get,
     Post,
@@ -324,4 +325,72 @@ pub enum AuthConfig {
     Basic { username: String, password: String },
     OAuth2 { client_id: String, client_secret: String, token_url: String },
     Bearer { token: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HttpAssertion {
+    pub query: AssertionQuery,
+    pub predicate: AssertionPredicate,
+    pub value: AssertionValue,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum AssertionQuery {
+    Status,
+    Header { name: String },
+    Body,
+    JsonPath { path: String },
+    XPath { path: String },
+    Regex { pattern: String },
+    Cookie { name: String },
+    Duration,
+    Certificate { field: CertificateField },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum CertificateField {
+    Subject,
+    Issuer,
+    Serial,
+    NotBefore,
+    NotAfter,
+    Algorithm,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum AssertionPredicate {
+    Equals,
+    NotEquals,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+    StartsWith,
+    EndsWith,
+    Contains,
+    NotContains,
+    Matches,
+    NotMatches,
+    Exists,
+    NotExists,
+    IsBoolean,
+    IsNumber,
+    IsInteger,
+    IsFloat,
+    IsString,
+    IsCollection,
+    IsEmpty,
+    IsIsoDate,
+    IsIpv4,
+    IsIpv6,
+    IsUuid,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum AssertionValue {
+    String(String),
+    Number(f64),
+    Integer(i64),
+    Boolean(bool),
+    Null,
 }

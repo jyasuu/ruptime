@@ -1,0 +1,373 @@
+# HTTPBin.org Test Configuration
+# Comprehensive test suite using httpbin.org endpoints with hurl-style assertions
+
+monitoring_interval_seconds = 15
+memory_cleanup_interval_minutes = 30
+keep_history_hours = 24
+
+# Basic GET endpoint with JSON response assertions
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin GET Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/get?test_param=hello&number=42"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  expected_status_code = 200
+  
+  # Multiple assertions demonstrating hurl syntax
+  [[hosts.checks.assertions]]
+  query = { Status = {} }
+  predicate = "Equals"
+  value = { Integer = 200 }
+  
+  [[hosts.checks.assertions]]
+  query = { Header = { name = "content-type" } }
+  predicate = "Contains"
+  value = { String = "application/json" }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.args.test_param" } }
+  predicate = "Equals"
+  value = { String = "hello" }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.args.number" } }
+  predicate = "Equals"
+  value = { String = "42" }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.url" } }
+  predicate = "StartsWith"
+  value = { String = "https://httpbin.org" }
+
+# JSON endpoint with complex JSON assertions
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin JSON Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/json"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.slideshow.title" } }
+  predicate = "Exists"
+  value = { Null = {} }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.slideshow.author" } }
+  predicate = "IsString"
+  value = { Null = {} }
+
+# UUID endpoint testing UUID validation
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin UUID Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/uuid"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.uuid" } }
+  predicate = "IsUuid"
+  value = { Null = {} }
+
+# IP address endpoint
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin IP Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/ip"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.origin" } }
+  predicate = "IsIpv4"
+  value = { Null = {} }
+
+# User-Agent endpoint
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin User-Agent Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/user-agent"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [hosts.checks.headers]
+  "User-Agent" = "UptimeMonitor/1.0 (Testing)"
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.'user-agent'" } }
+  predicate = "Contains"
+  value = { String = "UptimeMonitor" }
+
+# Basic Auth endpoint
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Basic Auth Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/basic-auth/testuser/testpass"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [hosts.checks.auth]
+  Basic = { username = "testuser", password = "testpass" }
+  
+  [[hosts.checks.assertions]]
+  query = { Status = {} }
+  predicate = "Equals"
+  value = { Integer = 200 }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.authenticated" } }
+  predicate = "Equals"
+  value = { Boolean = true }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.user" } }
+  predicate = "Equals"
+  value = { String = "testuser" }
+
+# Bearer token endpoint
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Bearer Auth Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/bearer"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [hosts.checks.auth]
+  Bearer = { token = "test-bearer-token-123" }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.authenticated" } }
+  predicate = "Equals"
+  value = { Boolean = true }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.token" } }
+  predicate = "Equals"
+  value = { String = "test-bearer-token-123" }
+
+# Status code testing
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Status 404 Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/status/404"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  expected_status_code = 404
+  
+  [[hosts.checks.assertions]]
+  query = { Status = {} }
+  predicate = "Equals"
+  value = { Integer = 404 }
+
+# Delay endpoint to test response time
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Delay Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/delay/2"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 15
+  
+  [[hosts.checks.assertions]]
+  query = { Duration = {} }
+  predicate = "GreaterThan"
+  value = { Integer = 1500 }  # Should take at least 1.5 seconds
+  
+  [[hosts.checks.assertions]]
+  query = { Duration = {} }
+  predicate = "LessThan"
+  value = { Integer = 10000 }  # Should take less than 10 seconds
+
+# Headers endpoint
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Headers Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/headers"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [hosts.checks.headers]
+  "X-Custom-Header" = "test-value-123"
+  "Accept" = "application/json"
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.headers.X-Custom-Header" } }
+  predicate = "Equals"
+  value = { String = "test-value-123" }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.headers.Accept" } }
+  predicate = "Contains"
+  value = { String = "application/json" }
+
+# POST endpoint with JSON data
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin POST Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/post"
+  protocol = "Https"
+  method = "Post"
+  timeout_seconds = 10
+  
+  [hosts.checks.headers]
+  "Content-Type" = "application/json"
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.url" } }
+  predicate = "Equals"
+  value = { String = "https://httpbin.org/post" }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.headers.Content-Type" } }
+  predicate = "Contains"
+  value = { String = "application/json" }
+
+# Regex pattern testing
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Regex Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/get?timestamp=2024-01-15T10:30:00Z"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.args.timestamp" } }
+  predicate = "Matches"
+  value = { String = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z" }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.args.timestamp" } }
+  predicate = "IsIsoDate"
+  value = { Null = {} }
+
+# Cookie testing
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Cookie Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/cookies/set?session_id=abc123&user_pref=dark_mode"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  expected_status_code = 302  # Redirect after setting cookies
+  
+  [[hosts.checks.assertions]]
+  query = { Status = {} }
+  predicate = "Equals"
+  value = { Integer = 302 }
+
+# XML endpoint testing
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin XML Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/xml"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [[hosts.checks.assertions]]
+  query = { Header = { name = "content-type" } }
+  predicate = "Contains"
+  value = { String = "application/xml" }
+  
+  [[hosts.checks.assertions]]
+  query = { Body = {} }
+  predicate = "Contains"
+  value = { String = "<?xml" }
+
+# Image endpoint testing
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Image Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/image/png"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [[hosts.checks.assertions]]
+  query = { Header = { name = "content-type" } }
+  predicate = "Equals"
+  value = { String = "image/png" }
+
+# Test negative assertions
+[[hosts]]
+address = "httpbin.org"
+alias = "HTTPBin Negative Assertions Test"
+  [[hosts.checks]]
+  type = "Http"
+  port = 443
+  path = "/get"
+  protocol = "Https"
+  method = "Get"
+  timeout_seconds = 10
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.args.nonexistent" } }
+  predicate = "NotExists"
+  value = { Null = {} }
+  
+  [[hosts.checks.assertions]]
+  query = { JsonPath = { path = "$.url" } }
+  predicate = "NotContains"
+  value = { String = "forbidden" }
+  
+  [[hosts.checks.assertions]]
+  query = { Status = {} }
+  predicate = "NotEquals"
+  value = { Integer = 500 }
