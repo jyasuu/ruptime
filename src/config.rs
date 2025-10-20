@@ -261,6 +261,13 @@ pub struct HostConfig {
 pub enum Check {
     Tcp(TcpCheck),
     Http(HttpCheck),
+    Postgres(PostgresCheck),
+    Redis(RedisCheck),
+    RabbitMQ(RabbitMQCheck),
+    Kafka(KafkaCheck),
+    MySQL(MySQLCheck),
+    MongoDB(MongoDBCheck),
+    Elasticsearch(ElasticsearchCheck),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -272,6 +279,159 @@ pub struct TcpCheck {
 
 fn default_tcp_timeout() -> u64 {
     5
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PostgresCheck {
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_postgres_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_postgres_ssl")]
+    pub ssl_mode: PostgresSslMode,
+}
+
+fn default_postgres_timeout() -> u64 {
+    10
+}
+
+fn default_postgres_ssl() -> PostgresSslMode {
+    PostgresSslMode::Prefer
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum PostgresSslMode {
+    Disable,
+    Prefer,
+    Require,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RedisCheck {
+    pub port: u16,
+    #[serde(default = "default_redis_timeout")]
+    pub timeout_seconds: u64,
+    pub password: Option<String>,
+    #[serde(default = "default_redis_database")]
+    pub database: u32,
+}
+
+fn default_redis_timeout() -> u64 {
+    5
+}
+
+fn default_redis_database() -> u32 {
+    0
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RabbitMQCheck {
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_rabbitmq_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_rabbitmq_vhost")]
+    pub vhost: String,
+    #[serde(default = "default_rabbitmq_ssl")]
+    pub use_ssl: bool,
+}
+
+fn default_rabbitmq_timeout() -> u64 {
+    10
+}
+
+fn default_rabbitmq_vhost() -> String {
+    "/".to_string()
+}
+
+fn default_rabbitmq_ssl() -> bool {
+    false
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KafkaCheck {
+    pub port: u16,
+    #[serde(default = "default_kafka_timeout")]
+    pub timeout_seconds: u64,
+    pub topic: Option<String>, // Optional topic to check
+    #[serde(default = "default_kafka_ssl")]
+    pub use_ssl: bool,
+}
+
+fn default_kafka_timeout() -> u64 {
+    10
+}
+
+fn default_kafka_ssl() -> bool {
+    false
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MySQLCheck {
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_mysql_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_mysql_ssl")]
+    pub use_ssl: bool,
+}
+
+fn default_mysql_timeout() -> u64 {
+    10
+}
+
+fn default_mysql_ssl() -> bool {
+    false
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MongoDBCheck {
+    pub port: u16,
+    pub database: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    #[serde(default = "default_mongodb_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_mongodb_ssl")]
+    pub use_ssl: bool,
+}
+
+fn default_mongodb_timeout() -> u64 {
+    10
+}
+
+fn default_mongodb_ssl() -> bool {
+    false
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ElasticsearchCheck {
+    pub port: u16,
+    #[serde(default = "default_elasticsearch_timeout")]
+    pub timeout_seconds: u64,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    #[serde(default = "default_elasticsearch_ssl")]
+    pub use_ssl: bool,
+    #[serde(default = "default_elasticsearch_index")]
+    pub index: Option<String>, // Optional index to check
+}
+
+fn default_elasticsearch_timeout() -> u64 {
+    10
+}
+
+fn default_elasticsearch_ssl() -> bool {
+    false
+}
+
+fn default_elasticsearch_index() -> Option<String> {
+    None
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

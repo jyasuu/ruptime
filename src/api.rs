@@ -300,6 +300,13 @@ async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl
         let check_type = match &status.last_result {
             Some(CheckResult::Tcp(_)) => "tcp",
             Some(CheckResult::Http(_)) => "http",
+            Some(CheckResult::Postgres(_)) => "postgres",
+            Some(CheckResult::Redis(_)) => "redis",
+            Some(CheckResult::RabbitMQ(_)) => "rabbitmq",
+            Some(CheckResult::Kafka(_)) => "kafka",
+            Some(CheckResult::MySQL(_)) => "mysql",
+            Some(CheckResult::MongoDB(_)) => "mongodb",
+            Some(CheckResult::Elasticsearch(_)) => "elasticsearch",
             None => "unknown",
         };
 
