@@ -22,6 +22,7 @@ jsonpath_lib = "0.3"
 regex = "1.10"
 uuid = { version = "1.0", features = ["v4"] }
 xpath_reader = "0.5"
+urlencoding = "2.1"
 
 [dev-dependencies]
 tempfile = "3" # Already added from previous step, ensure it's here

@@ -9,6 +9,7 @@ A comprehensive Rust-based uptime monitoring tool that checks the availability o
 - **TCP Monitoring** - Port connectivity testing
 - **SSL/TLS Certificate Validation** - Certificate expiry and validity checks
 - **Prometheus Metrics** - Industry-standard metrics format
+- **SVG Status Badges** - Embeddable status badges for dashboards and documentation
 - **Configurable Intervals** - Flexible monitoring frequency
 
 ### Advanced HTTP Testing
@@ -49,6 +50,47 @@ The `/metrics` endpoint provides Prometheus-compatible metrics:
 - `uptime_cert_expiry_seconds` - SSL certificate expiry time
 - `uptime_cert_is_valid` - Certificate validity status
 
+## 🏷️ SVG Status Badges
+
+The uptime monitor provides SVG badges that can be embedded in websites, documentation, or dashboards to display real-time status information.
+
+### Badge Endpoints
+
+- **`/badges`** - HTML page listing all available badges with previews
+- **`/badge/{target_alias}`** - Detailed badge with response time and uptime percentage
+- **`/badge/{target_alias}/simple`** - Simple badge showing only UP/DOWN status
+
+### Badge Features
+
+- **Real-time Status** - Shows current UP/DOWN status with appropriate colors
+- **Response Time** - Displays latest response time for HTTP checks (detailed badge only)
+- **Uptime Percentage** - Shows 24-hour uptime percentage (detailed badge only)
+- **URL Encoding** - Target aliases with spaces or special characters are automatically handled
+- **Colors**: 
+  - 🟢 Green (`#4c1`) for healthy targets
+  - 🔴 Red (`#e05d44`) for unhealthy targets  
+  - ⚪ Gray (`#9f9f9f`) for unknown/not found targets
+
+### Usage Examples
+
+#### Markdown
+```markdown
+![Uptime Status](http://your-monitor:8080/badge/My%20Website)
+![Simple Status](http://your-monitor:8080/badge/My%20Website/simple)
+```
+
+#### HTML
+```html
+<img src="http://your-monitor:8080/badge/My%20Website" alt="Website Status">
+<img src="http://your-monitor:8080/badge/API%20Server/simple" alt="API Status">
+```
+
+#### RestructuredText
+```rst
+.. image:: http://your-monitor:8080/badge/Database%20Server
+   :alt: Database Status
+```
+
 ## 🛠️ Quick Start
 
 ### 1. Installation
@@ -71,9 +113,19 @@ cargo run
 ./target/release/uptime_monitor
 ```
 
-### 4. Access Metrics
+### 4. Access Metrics & Badges
 ```bash
+# Prometheus metrics
 curl http://localhost:8080/metrics
+
+# View all available badges
+curl http://localhost:8080/badges
+
+# Get SVG badge for a specific target
+curl http://localhost:8080/badge/Example%20Website
+
+# Get simple SVG badge (no additional info)
+curl http://localhost:8080/badge/Example%20Website/simple
 ```
 
 ## ⚙️ Configuration

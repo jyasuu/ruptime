@@ -6,8 +6,10 @@ use std::fmt::Write;
 use log::{info, error}; // Added log macros
 use prometheus::{Encoder, TextEncoder, Registry};
 use prometheus::process_collector::ProcessCollector;
+use urlencoding::decode;
 
 const CONTENT_TYPE_PROMETHEUS: &str = "text/plain; version=0.0.4; charset=utf-8";
+const CONTENT_TYPE_SVG: &str = "image/svg+xml; charset=utf-8";
 
 // --- Prometheus Metric Definitions ---
 const HELP_MONITOR_STATUS: &str = "# HELP monitor_status Current health status of the monitor (0=DOWN, 1=UP).";
@@ -32,6 +34,237 @@ fn escape_label_value(value: &str) -> String {
     value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
 }
 
+// Helper to escape text for SVG
+fn escape_svg_text(text: &str) -> String {
+    text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+}
+
+// Generate SVG badge for a target status
+fn generate_svg_badge(
+    label: &str,
+    message: &str,
+    color: &str,
+    response_time: Option<u128>,
+    uptime: Option<f32>,
+) -> String {
+    let label_escaped = escape_svg_text(label);
+    let message_escaped = escape_svg_text(message);
+    
+    // Calculate text widths (approximate)
+    let label_width = label.len() * 7 + 10;
+    let message_width = message.len() * 7 + 10;
+    let total_width = label_width + message_width;
+    
+    let mut additional_info = String::new();
+    let mut badge_height = 20;
+    
+    // Add response time and uptime if available
+    if response_time.is_some() || uptime.is_some() {
+        badge_height = 35;
+        let mut info_parts = Vec::new();
+        
+        if let Some(rt) = response_time {
+            info_parts.push(format!("{}ms", rt));
+        }
+        
+        if let Some(up) = uptime {
+            info_parts.push(format!("{:.1}% uptime", up));
+        }
+        
+        let info_text = info_parts.join(" | ");
+        additional_info = format!(
+            "<text x=\"{}\" y=\"30\" text-anchor=\"middle\" font-family=\"Verdana,sans-serif\" font-size=\"9\" fill=\"#333\">{}</text>",
+            total_width / 2,
+            escape_svg_text(&info_text)
+        );
+    }
+
+    format!(
+        concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">",
+            "<defs><linearGradient id=\"b\" x2=\"0\" y2=\"100%\">",
+            "<stop offset=\"0\" stop-color=\"#bbb\" stop-opacity=\".1\"/>",
+            "<stop offset=\"1\" stop-opacity=\".1\"/></linearGradient></defs>",
+            "<clipPath id=\"a\"><rect width=\"{}\" height=\"{}\" rx=\"3\" fill=\"#fff\"/></clipPath>",
+            "<g clip-path=\"url(#a)\">",
+            "<path fill=\"#555\" d=\"M0 0h{}v{}H0z\"/>",
+            "<path fill=\"{}\" d=\"M{} 0h{}v{}H{}z\"/>",
+            "<path fill=\"url(#b)\" d=\"M0 0h{}v{}H0z\"/></g>",
+            "<g fill=\"#fff\" text-anchor=\"middle\" font-family=\"Verdana,sans-serif\" font-size=\"11\">",
+            "<text x=\"{}\" y=\"15\" fill=\"#010101\" fill-opacity=\".3\">{}</text>",
+            "<text x=\"{}\" y=\"14\">{}</text>",
+            "<text x=\"{}\" y=\"15\" fill=\"#010101\" fill-opacity=\".3\">{}</text>",
+            "<text x=\"{}\" y=\"14\">{}</text></g>{}</svg>"
+        ),
+        total_width, badge_height,        // svg dimensions
+        total_width, badge_height,        // rect dimensions
+        label_width, badge_height,        // left background
+        color, label_width, message_width, badge_height, label_width,  // right background
+        total_width, badge_height,        // gradient overlay
+        label_width / 2, label_escaped,   // label shadow
+        label_width / 2, label_escaped,   // label text
+        label_width + message_width / 2, message_escaped,  // message shadow
+        label_width + message_width / 2, message_escaped,  // message text
+        additional_info                   // additional info
+    )
+}
+
+
+#[get("/badge/{target_alias}")]
+async fn badge_handler(
+    path: web::Path<String>,
+    data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>,
+) -> impl Responder {
+    let target_alias = path.into_inner();
+    let decoded_alias = match decode(&target_alias) {
+        Ok(decoded) => decoded.to_string(),
+        Err(_) => target_alias, // Use original if decoding fails
+    };
+    
+    let statuses = data.lock().await;
+    
+    // Find the target status by alias
+    let target_status = statuses.iter().find(|status| status.target_alias == decoded_alias);
+    
+    match target_status {
+        Some(status) => {
+            let (message, color) = if status.is_healthy {
+                ("UP", "#4c1")
+            } else {
+                ("DOWN", "#e05d44")
+            };
+            
+            let response_time = match &status.last_result {
+                Some(CheckResult::Http(http_details)) => Some(http_details.response_time_ms),
+                _ => None,
+            };
+            
+            let svg = generate_svg_badge(
+                &status.target_alias,
+                message,
+                color,
+                response_time,
+                Some(status.uptime_percentage_24h),
+            );
+            
+            HttpResponse::Ok()
+                .content_type(CONTENT_TYPE_SVG)
+                .body(svg)
+        }
+        None => {
+            let svg = generate_svg_badge(
+                &decoded_alias,
+                "NOT FOUND",
+                "#9f9f9f",
+                None,
+                None,
+            );
+            
+            HttpResponse::NotFound()
+                .content_type(CONTENT_TYPE_SVG)
+                .body(svg)
+        }
+    }
+}
+
+#[get("/badge/{target_alias}/simple")]
+async fn simple_badge_handler(
+    path: web::Path<String>,
+    data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>,
+) -> impl Responder {
+    let target_alias = path.into_inner();
+    let decoded_alias = match decode(&target_alias) {
+        Ok(decoded) => decoded.to_string(),
+        Err(_) => target_alias,
+    };
+    
+    let statuses = data.lock().await;
+    let target_status = statuses.iter().find(|status| status.target_alias == decoded_alias);
+    
+    match target_status {
+        Some(status) => {
+            let (message, color) = if status.is_healthy {
+                ("UP", "#4c1")
+            } else {
+                ("DOWN", "#e05d44")
+            };
+            
+            let svg = generate_svg_badge(
+                &status.target_alias,
+                message,
+                color,
+                None, // No additional info for simple badge
+                None,
+            );
+            
+            HttpResponse::Ok()
+                .content_type(CONTENT_TYPE_SVG)
+                .body(svg)
+        }
+        None => {
+            let svg = generate_svg_badge(
+                &decoded_alias,
+                "NOT FOUND",
+                "#9f9f9f",
+                None,
+                None,
+            );
+            
+            HttpResponse::NotFound()
+                .content_type(CONTENT_TYPE_SVG)
+                .body(svg)
+        }
+    }
+}
+
+#[get("/badges")]
+async fn badges_list_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl Responder {
+    let statuses = data.lock().await;
+    
+    let mut html = String::new();
+    html.push_str("<!DOCTYPE html><html><head><title>Uptime Monitor Badges</title>");
+    html.push_str("<style>body { font-family: Arial, sans-serif; margin: 40px; }");
+    html.push_str(".badge-item { margin: 15px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }");
+    html.push_str(".badge-url { font-family: monospace; background: #f5f5f5; padding: 5px; margin: 5px 0; }");
+    html.push_str("</style></head><body>");
+    html.push_str("<h1>Uptime Monitor Badges</h1>");
+    html.push_str("<p>Available SVG badges for all monitored targets:</p>");
+    
+    for status in statuses.iter() {
+        let encoded_alias = urlencoding::encode(&status.target_alias);
+        html.push_str(&format!(
+            r#"<div class="badge-item">
+                <h3>{}</h3>
+                <p><strong>Detailed Badge:</strong></p>
+                <img src="/badge/{}" alt="Status badge for {}">
+                <div class="badge-url">URL: /badge/{}</div>
+                <p><strong>Simple Badge:</strong></p>
+                <img src="/badge/{}/simple" alt="Simple status badge for {}">
+                <div class="badge-url">URL: /badge/{}/simple</div>
+                <p><strong>Status:</strong> {} | <strong>Monitor URL:</strong> {}</p>
+            </div>"#,
+            escape_svg_text(&status.target_alias),
+            encoded_alias,
+            escape_svg_text(&status.target_alias),
+            encoded_alias,
+            encoded_alias,
+            escape_svg_text(&status.target_alias),
+            encoded_alias,
+            if status.is_healthy { "UP" } else { "DOWN" },
+            escape_svg_text(&status.monitor_url)
+        ));
+    }
+    
+    html.push_str("</body></html>");
+    
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(html)
+}
 
 #[get("/metrics")]
 async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl Responder {
@@ -159,6 +392,9 @@ pub async fn start_web_server(
         App::new()
             .app_data(web::Data::new(shared_statuses.clone()))
             .service(metrics_handler)
+            .service(badge_handler)
+            .service(simple_badge_handler)
+            .service(badges_list_handler)
     })
     .bind(&address)? // Borrow address
     .run()
@@ -394,5 +630,125 @@ mod tests {
         let expected_escaped_name = "monitor_name=\"name with \\\"quotes\\\" and \\\\backslash and \\nnewline\"";
         assert!(body_str.contains(expected_escaped_name));
         assert!(body_str.contains(&format!("monitor_status{{{},monitor_type=\"http\",monitor_url=\"http://label.test/path\",monitor_hostname=\"label.test\",monitor_port=\"80\"}} 1", expected_escaped_name)));
+    }
+
+    // Badge tests
+    fn create_test_target_with_alias(alias: &str, is_healthy: bool) -> TargetStatus {
+        let mut status = TargetStatus::new(
+            alias.to_string(),
+            "http://example.com".to_string(),
+            "example.com".to_string(),
+            80,
+        );
+        status.is_healthy = is_healthy;
+        status.uptime_percentage_24h = if is_healthy { 99.5 } else { 45.2 };
+        
+        if is_healthy {
+            status.last_result = Some(CheckResult::Http(HttpCheckResultDetails {
+                status: CheckStatus::Healthy,
+                response_time_ms: 150,
+                cert_days_remaining: Some(30),
+                cert_is_valid: Some(true),
+            }));
+        } else {
+            status.last_result = Some(CheckResult::Http(HttpCheckResultDetails {
+                status: CheckStatus::Unhealthy("Connection failed".to_string()),
+                response_time_ms: 5000,
+                cert_days_remaining: None,
+                cert_is_valid: Some(false),
+            }));
+        }
+        
+        status
+    }
+
+    #[actix_web::test]
+    async fn test_badge_handler_healthy_target() {
+        let statuses = vec![
+            create_test_target_with_alias("Test Website", true),
+        ];
+        let shared_statuses = Arc::new(Mutex::new(statuses));
+        let data = web::Data::new(shared_statuses);
+
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(data.clone())
+                .service(badge_handler)
+        ).await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/badge/Test%20Website")
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers().get("content-type").unwrap(), "image/svg+xml; charset=utf-8");
+
+        let body_bytes = to_bytes(resp.into_body()).await.unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+        // Check SVG content
+        assert!(body_str.contains("<svg"));
+        assert!(body_str.contains("Test Website"));
+        assert!(body_str.contains("UP"));
+        assert!(body_str.contains("#4c1")); // Green color for healthy
+        assert!(body_str.contains("150ms")); // Response time
+        assert!(body_str.contains("99.5% uptime")); // Uptime percentage
+    }
+
+    #[actix_web::test]
+    async fn test_simple_badge_handler() {
+        let statuses = vec![
+            create_test_target_with_alias("Simple Test", true),
+        ];
+        let shared_statuses = Arc::new(Mutex::new(statuses));
+        let data = web::Data::new(shared_statuses);
+
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(data.clone())
+                .service(simple_badge_handler)
+        ).await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/badge/Simple%20Test/simple")
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+
+        let body_bytes = to_bytes(resp.into_body()).await.unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+        assert!(body_str.contains("Simple Test"));
+        assert!(body_str.contains("UP"));
+        // Should NOT contain additional info in simple badge
+        assert!(!body_str.contains("ms"));
+        assert!(!body_str.contains("uptime"));
+    }
+
+    #[actix_web::test]
+    async fn test_badge_handler_not_found() {
+        let statuses: Vec<TargetStatus> = vec![];
+        let shared_statuses = Arc::new(Mutex::new(statuses));
+        let data = web::Data::new(shared_statuses);
+
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(data.clone())
+                .service(badge_handler)
+        ).await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/badge/NonExistent")
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), 404);
+
+        let body_bytes = to_bytes(resp.into_body()).await.unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+        assert!(body_str.contains("NonExistent"));
+        assert!(body_str.contains("NOT FOUND"));
+        assert!(body_str.contains("#9f9f9f")); // Gray color for not found
     }
 }
