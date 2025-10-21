@@ -94,13 +94,14 @@ alias = "Database Server"
   port = 5432
   timeout_seconds = 3
 
-# Multiple checks for the same host
+# Multiple checks for the same host with custom names
 [[hosts]]
 address = "web.example.com"
 alias = "Web Server"
-  # HTTP check
+  # HTTP check with custom name
   [[hosts.checks]]
   type = "Http"
+  name = "Web Server HTTP"
   port = 80
   path = "/"
   protocol = "Http"
@@ -109,9 +110,10 @@ alias = "Web Server"
   expected_status_code = 200
   body_regex_check = "<title>.*Welcome.*</title>"
   
-  # HTTPS check with SSL verification
+  # HTTPS check with SSL verification and custom name
   [[hosts.checks]]
   type = "Http"
+  name = "Web Server HTTPS"
   port = 443
   path = "/"
   protocol = "Https"
@@ -120,9 +122,10 @@ alias = "Web Server"
   check_ssl_certificate = true
   expected_status_code = 200
   
-  # SSH port check
+  # SSH port check with custom name
   [[hosts.checks]]
   type = "Tcp"
+  name = "Web Server SSH"
   port = 22
   timeout_seconds = 5
 

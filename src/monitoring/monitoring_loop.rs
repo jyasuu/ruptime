@@ -21,8 +21,38 @@ pub async fn run_monitoring_loop(
     // Initialize statuses for all targets
     let mut initial_statuses = Vec::new();
     for host_config in app_config.hosts.iter() {
-        let alias = host_config.alias.as_deref().unwrap_or(&host_config.address);
+        let host_alias = host_config.alias.as_deref().unwrap_or(&host_config.address);
         for check in &host_config.checks {
+            // Use check name if provided, otherwise fall back to host alias with check type
+            let check_name = match check {
+                Check::Tcp(tcp_check) => tcp_check.name.as_deref(),
+                Check::Http(http_check) => http_check.name.as_deref(),
+                Check::Postgres(postgres_check) => postgres_check.name.as_deref(),
+                Check::Redis(redis_check) => redis_check.name.as_deref(),
+                Check::RabbitMQ(rabbitmq_check) => rabbitmq_check.name.as_deref(),
+                Check::Kafka(kafka_check) => kafka_check.name.as_deref(),
+                Check::MySQL(mysql_check) => mysql_check.name.as_deref(),
+                Check::MongoDB(mongodb_check) => mongodb_check.name.as_deref(),
+                Check::Elasticsearch(es_check) => es_check.name.as_deref(),
+            };
+            
+            let target_alias = if let Some(name) = check_name {
+                name.to_string()
+            } else {
+                // Generate default name: "HostAlias (CheckType:Port)"
+                let check_type_port = match check {
+                    Check::Tcp(tcp_check) => format!("TCP:{}", tcp_check.port),
+                    Check::Http(http_check) => format!("HTTP:{}", http_check.port),
+                    Check::Postgres(postgres_check) => format!("Postgres:{}", postgres_check.port),
+                    Check::Redis(redis_check) => format!("Redis:{}", redis_check.port),
+                    Check::RabbitMQ(rabbitmq_check) => format!("RabbitMQ:{}", rabbitmq_check.port),
+                    Check::Kafka(kafka_check) => format!("Kafka:{}", kafka_check.port),
+                    Check::MySQL(mysql_check) => format!("MySQL:{}", mysql_check.port),
+                    Check::MongoDB(mongodb_check) => format!("MongoDB:{}", mongodb_check.port),
+                    Check::Elasticsearch(es_check) => format!("Elasticsearch:{}", es_check.port),
+                };
+                format!("{} ({})", host_alias, check_type_port)
+            };
             let (monitor_url, monitor_port) = match check {
                 Check::Tcp(tcp_check) => (
                     format!("tcp://{}:{}", host_config.address, tcp_check.port),
@@ -73,7 +103,7 @@ pub async fn run_monitoring_loop(
             };
 
             initial_statuses.push(TargetStatus::new(
-                alias.to_string(),
+                target_alias.clone(),
                 monitor_url,
                 host_config.address.clone(),
                 monitor_port,
@@ -84,7 +114,7 @@ pub async fn run_monitoring_loop(
             let shared_statuses_clone = Arc::clone(&shared_statuses);
             let host_address_clone = host_config.address.clone();
             let check_clone = check.clone(); // Check enum should derive Clone
-            let alias_clone = alias.to_string();
+            let alias_clone = target_alias.clone();
 
             tokio::spawn(async move {
                 loop {

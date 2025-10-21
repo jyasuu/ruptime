@@ -159,6 +159,7 @@ alias = "Example Website"
 
   [[hosts.checks]]
   type = "Http"
+  name = "Example HTTPS Check"  # Optional: Custom name for this specific check
   port = 443
   path = "/"
   protocol = "Https"
@@ -166,6 +167,41 @@ alias = "Example Website"
   timeout_seconds = 10
   expected_status_code = 200
   check_ssl_certificate = true
+```
+
+### Check Naming
+Each check can have an optional `name` field that will be used as the target alias in metrics and badges:
+
+- **With `name`**: The check will appear in metrics/badges with the specified name
+- **Without `name`**: The check will appear as "HostAlias (CheckType:Port)" (e.g., "Web Server (HTTP:80)")
+
+This is especially useful when monitoring multiple services on the same host:
+
+```toml
+[[hosts]]
+address = "web.example.com"
+alias = "Web Server"
+
+  [[hosts.checks]]
+  type = "Http"
+  name = "Website Frontend"  # Shows as "Website Frontend" in metrics
+  port = 80
+  path = "/"
+  protocol = "Http"
+  method = "Get"
+  
+  [[hosts.checks]]
+  type = "Http"
+  name = "Admin Panel"  # Shows as "Admin Panel" in metrics
+  port = 443
+  path = "/admin"
+  protocol = "Https"
+  method = "Get"
+  
+  [[hosts.checks]]
+  type = "Tcp"
+  name = "SSH Access"  # Shows as "SSH Access" in metrics
+  port = 22
 ```
 
 ### Advanced HTTP Configuration

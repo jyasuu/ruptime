@@ -16,7 +16,7 @@ alias = "Google Search (HTTPS)"
   # body_regex_check = "Google" # Optional
 
 [[hosts]]
-address = "cloudflare.com"
+address = "cloudflare.com" # Example of a host with multiple checks
 alias = "Cloudflare"
   [[hosts.checks]]
   type = "Http"
@@ -26,7 +26,11 @@ alias = "Cloudflare"
   method = "Head" # Using HEAD request
   timeout_seconds = 3
   expected_status_code = 200
-  check_ssl_certificate = true
+
+  [[hosts.checks]]
+  type = "Tcp" # Corresponds to Check::Tcp variant
+  port = 443 # Checking TCP connectivity to HTTPS port
+  timeout_seconds = 2 # Optional, defaults to 5 for Tcp
 
 [[hosts]]
 address = "1.1.1.1"

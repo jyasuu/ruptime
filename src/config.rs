@@ -271,6 +271,7 @@ pub enum Check {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TcpCheck {
+    pub name: Option<String>,
     pub port: u16,
     #[serde(default = "default_tcp_timeout")]
     pub timeout_seconds: u64,
@@ -282,6 +283,7 @@ fn default_tcp_timeout() -> u64 {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresCheck {
+    pub name: Option<String>,
     pub port: u16,
     pub database: String,
     pub username: String,
@@ -309,6 +311,7 @@ pub enum PostgresSslMode {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RedisCheck {
+    pub name: Option<String>,
     pub port: u16,
     #[serde(default = "default_redis_timeout")]
     pub timeout_seconds: u64,
@@ -327,6 +330,7 @@ fn default_redis_database() -> u32 {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RabbitMQCheck {
+    pub name: Option<String>,
     pub port: u16,
     pub username: String,
     pub password: String,
@@ -352,6 +356,7 @@ fn default_rabbitmq_ssl() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KafkaCheck {
+    pub name: Option<String>,
     pub port: u16,
     #[serde(default = "default_kafka_timeout")]
     pub timeout_seconds: u64,
@@ -370,6 +375,7 @@ fn default_kafka_ssl() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MySQLCheck {
+    pub name: Option<String>,
     pub port: u16,
     pub database: String,
     pub username: String,
@@ -390,6 +396,7 @@ fn default_mysql_ssl() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MongoDBCheck {
+    pub name: Option<String>,
     pub port: u16,
     pub database: String,
     pub username: Option<String>,
@@ -410,6 +417,7 @@ fn default_mongodb_ssl() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ElasticsearchCheck {
+    pub name: Option<String>,
     pub port: u16,
     #[serde(default = "default_elasticsearch_timeout")]
     pub timeout_seconds: u64,
@@ -435,6 +443,7 @@ fn default_elasticsearch_index() -> Option<String> {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HttpCheck {
+    pub name: Option<String>,
     pub port: u16,
     pub path: String,
     pub protocol: HttpProtocol,
