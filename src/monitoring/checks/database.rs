@@ -72,6 +72,7 @@ pub async fn check_redis(address: &str, config: &RedisCheck) -> ServiceCheckResu
             db: config.database as i64,
             username: None,
             password: config.password.clone(),
+            protocol: redis::ProtocolVersion::RESP2,
         },
     };
     
@@ -79,7 +80,7 @@ pub async fn check_redis(address: &str, config: &RedisCheck) -> ServiceCheckResu
         Duration::from_secs(config.timeout_seconds),
         async {
             let client = redis::Client::open(connection_info)?;
-            let mut conn = client.get_async_connection().await?;
+            let mut conn = client.get_multiplexed_async_connection().await?;
             let info: String = redis::cmd("INFO").arg("server").query_async(&mut conn).await?;
             Ok::<_, redis::RedisError>((conn, info))
         }

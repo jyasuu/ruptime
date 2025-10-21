@@ -25,7 +25,7 @@ xpath_reader = "0.5"
 urlencoding = "2.1"
 # Database and service health check dependencies
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
-redis = { version = "0.24", features = ["tokio-comp"] }
+redis = { version = "0.26", features = ["tokio-comp"] }
 lapin = "2.3" # RabbitMQ client
 rdkafka = { version = "0.36", features = ["cmake-build"] }
 mysql_async = "0.32"
