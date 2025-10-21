@@ -48,7 +48,6 @@ fn default_keep_history_hours() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::config::*;
-    use std::fs;
     use std::io::Write;
     use tempfile::NamedTempFile; // Using tempfile for easier management
 
@@ -249,7 +248,7 @@ address = "default.tcp.example.com"
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HostConfig {
     pub address: String,
     pub alias: Option<String>,

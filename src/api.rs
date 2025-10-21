@@ -148,7 +148,7 @@ async fn badge_handler(
                 message,
                 color,
                 response_time,
-                Some(status.uptime_percentage_24h),
+                Some(status.uptime_percentage_24h as f32),
             );
             
             HttpResponse::Ok()
