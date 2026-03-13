@@ -1,11 +1,15 @@
+use crate::config::{AppConfig, Check, HttpProtocol};
+use crate::monitoring::checks::{
+    build_http_client, check_elasticsearch, check_http_target, check_tcp_port,
+};
+use crate::monitoring::types::{
+    CheckResult, CheckStatus, HttpCheckResultDetails, TargetStatus, TcpCheckResult,
+};
+use log::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use log::{info, warn, debug};
-use crate::config::{AppConfig, Check, HttpProtocol};
-use crate::monitoring::types::{TargetStatus, CheckResult, TcpCheckResult, HttpCheckResultDetails, CheckStatus};
-use crate::monitoring::checks::{check_tcp_port, check_http_target, build_http_client, check_postgres, check_redis, check_rabbitmq, check_kafka, check_mysql, check_mongodb, check_elasticsearch};
 
 // --- Main Monitoring Loop ---
 
@@ -63,22 +67,39 @@ pub async fn run_monitoring_loop(
                         HttpProtocol::Https => "https",
                     };
                     (
-                        format!("{}://{}:{}{}", protocol_str, host_config.address, http_check.port, http_check.path),
+                        format!(
+                            "{}://{}:{}{}",
+                            protocol_str, host_config.address, http_check.port, http_check.path
+                        ),
                         http_check.port,
                     )
-                },
+                }
                 Check::Postgres(postgres_check) => (
-                    format!("postgres://{}:{}/{}", host_config.address, postgres_check.port, postgres_check.database),
+                    format!(
+                        "postgres://{}:{}/{}",
+                        host_config.address, postgres_check.port, postgres_check.database
+                    ),
                     postgres_check.port,
                 ),
                 Check::Redis(redis_check) => (
-                    format!("redis://{}:{}/{}", host_config.address, redis_check.port, redis_check.database),
+                    format!(
+                        "redis://{}:{}/{}",
+                        host_config.address, redis_check.port, redis_check.database
+                    ),
                     redis_check.port,
                 ),
                 Check::RabbitMQ(rabbitmq_check) => (
-                    format!("{}://{}:{}/{}",
-                        if rabbitmq_check.use_ssl { "amqps" } else { "amqp" },
-                        host_config.address, rabbitmq_check.port, rabbitmq_check.vhost),
+                    format!(
+                        "{}://{}:{}/{}",
+                        if rabbitmq_check.use_ssl {
+                            "amqps"
+                        } else {
+                            "amqp"
+                        },
+                        host_config.address,
+                        rabbitmq_check.port,
+                        rabbitmq_check.vhost
+                    ),
                     rabbitmq_check.port,
                 ),
                 Check::Kafka(kafka_check) => (
@@ -86,17 +107,26 @@ pub async fn run_monitoring_loop(
                     kafka_check.port,
                 ),
                 Check::MySQL(mysql_check) => (
-                    format!("mysql://{}:{}/{}", host_config.address, mysql_check.port, mysql_check.database),
+                    format!(
+                        "mysql://{}:{}/{}",
+                        host_config.address, mysql_check.port, mysql_check.database
+                    ),
                     mysql_check.port,
                 ),
                 Check::MongoDB(mongodb_check) => (
-                    format!("mongodb://{}:{}/{}", host_config.address, mongodb_check.port, mongodb_check.database),
+                    format!(
+                        "mongodb://{}:{}/{}",
+                        host_config.address, mongodb_check.port, mongodb_check.database
+                    ),
                     mongodb_check.port,
                 ),
                 Check::Elasticsearch(es_check) => (
-                    format!("{}://{}:{}",
+                    format!(
+                        "{}://{}:{}",
                         if es_check.use_ssl { "https" } else { "http" },
-                        host_config.address, es_check.port),
+                        host_config.address,
+                        es_check.port
+                    ),
                     es_check.port,
                 ),
             };
@@ -120,11 +150,16 @@ pub async fn run_monitoring_loop(
                 // reqwest::Client is cheap to clone (it's Arc-backed) and holds the
                 // connection pool. Reusing it avoids paying TLS context construction
                 // and pool allocation cost on every single check cycle.
-                let http_client: Option<reqwest::Client> = if let Check::Http(http_check_config) = &check_clone {
+                let http_client: Option<reqwest::Client> = if let Check::Http(http_check_config) =
+                    &check_clone
+                {
                     match build_http_client(http_check_config) {
                         Ok(c) => Some(c),
                         Err(e) => {
-                            warn!("Failed to build HTTP client for {}: {}. Will retry each cycle.", alias_clone, e);
+                            warn!(
+                                "Failed to build HTTP client for {}: {}. Will retry each cycle.",
+                                alias_clone, e
+                            );
                             None
                         }
                     }
@@ -181,7 +216,11 @@ pub async fn run_monitoring_loop(
                                         None
                                     };
 
-                                    status_entry.add_check_result(is_healthy_now, Some(response_time_ms), error_message);
+                                    status_entry.add_check_result(
+                                        is_healthy_now,
+                                        Some(response_time_ms),
+                                        error_message,
+                                    );
 
                                     if status_entry.is_healthy {
                                         if status_entry.consecutive_failures > 0 {
@@ -210,28 +249,43 @@ pub async fn run_monitoring_loop(
                             };
                             info!(
                                 "Performing HTTP check for target: {} ({}://{}:{}{})",
-                                alias_clone, protocol_str, host_address_clone, http_check_config.port, http_check_config.path
+                                alias_clone,
+                                protocol_str,
+                                host_address_clone,
+                                http_check_config.port,
+                                http_check_config.path
                             );
 
                             // Use the pre-built client, or fall back to a fresh one if startup
                             // construction failed (rare error path).
                             let http_result = match &http_client {
                                 Some(client) => {
-                                    check_http_target(&host_address_clone, http_check_config, client).await
+                                    check_http_target(
+                                        &host_address_clone,
+                                        http_check_config,
+                                        client,
+                                    )
+                                    .await
                                 }
-                                None => {
-                                    match build_http_client(http_check_config) {
-                                        Ok(client) => check_http_target(&host_address_clone, http_check_config, &client).await,
-                                        Err(e) => {
-                                            crate::monitoring::types::HttpTargetCheckResult {
-                                                status: CheckStatus::Unhealthy(format!("Failed to build HTTP client: {}", e)),
-                                                response_time_ms: 0,
-                                                cert_days_remaining: None,
-                                                cert_is_valid: None,
-                                            }
-                                        }
+                                None => match build_http_client(http_check_config) {
+                                    Ok(client) => {
+                                        check_http_target(
+                                            &host_address_clone,
+                                            http_check_config,
+                                            &client,
+                                        )
+                                        .await
                                     }
-                                }
+                                    Err(e) => crate::monitoring::types::HttpTargetCheckResult {
+                                        status: CheckStatus::Unhealthy(format!(
+                                            "Failed to build HTTP client: {}",
+                                            e
+                                        )),
+                                        response_time_ms: 0,
+                                        cert_days_remaining: None,
+                                        cert_is_valid: None,
+                                    },
+                                },
                             };
 
                             let is_healthy_now = matches!(http_result.status, CheckStatus::Healthy);
@@ -254,16 +308,15 @@ pub async fn run_monitoring_loop(
                                 let mut statuses = shared_statuses_clone.lock().await;
                                 if let Some(status_entry) = statuses.get_mut(status_index) {
                                     status_entry.last_result = Some(current_check_result.clone());
-                                    status_entry.cert_days_remaining = http_result.cert_days_remaining;
+                                    status_entry.cert_days_remaining =
+                                        http_result.cert_days_remaining;
                                     status_entry.cert_is_valid = http_result.cert_is_valid;
 
                                     let error_message = if !is_healthy_now {
                                         match &current_check_result {
-                                            CheckResult::Http(http_res) => {
-                                                match &http_res.status {
-                                                    CheckStatus::Unhealthy(msg) => Some(msg.clone()),
-                                                    _ => None,
-                                                }
+                                            CheckResult::Http(http_res) => match &http_res.status {
+                                                CheckStatus::Unhealthy(msg) => Some(msg.clone()),
+                                                _ => None,
                                             },
                                             _ => None,
                                         }
@@ -271,7 +324,11 @@ pub async fn run_monitoring_loop(
                                         None
                                     };
 
-                                    status_entry.add_check_result(is_healthy_now, Some(http_result.response_time_ms), error_message);
+                                    status_entry.add_check_result(
+                                        is_healthy_now,
+                                        Some(http_result.response_time_ms),
+                                        error_message,
+                                    );
 
                                     if status_entry.is_healthy {
                                         if status_entry.consecutive_failures > 0 {
@@ -281,11 +338,9 @@ pub async fn run_monitoring_loop(
                                     } else {
                                         status_entry.consecutive_failures += 1;
                                         let reason_str = match &current_check_result {
-                                            CheckResult::Http(http_res) => {
-                                                match &http_res.status {
-                                                    CheckStatus::Unhealthy(msg) => msg.clone(),
-                                                    _ => "Unknown HTTP error".to_string(),
-                                                }
+                                            CheckResult::Http(http_res) => match &http_res.status {
+                                                CheckStatus::Unhealthy(msg) => msg.clone(),
+                                                _ => "Unknown HTTP error".to_string(),
                                             },
                                             _ => "Unknown error".to_string(),
                                         };
@@ -541,13 +596,23 @@ pub async fn run_monitoring_loop(
                                 "Performing {} check for target: {} ({}:{})",
                                 check_type_str, alias_clone, host_address_clone, es_config.port
                             );
-                            let service_result = check_elasticsearch(&host_address_clone, es_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_elasticsearch(&host_address_clone, es_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
                             if is_healthy_now {
                                 info!("Target {} ({}) is healthy. Response time: {}ms (Elasticsearch)", alias_clone, host_address_clone, service_result.response_time_ms);
                             }
                             current_check_result = CheckResult::Elasticsearch(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                     }
 
@@ -580,13 +645,13 @@ async fn update_service_status(
         status_entry.last_result = Some(current_check_result.clone());
 
         let (response_time_ms, error_message) = match &current_check_result {
-            CheckResult::Postgres(service_res) |
-            CheckResult::Redis(service_res) |
-            CheckResult::RabbitMQ(service_res) |
-            CheckResult::Kafka(service_res) |
-            CheckResult::MySQL(service_res) |
-            CheckResult::MongoDB(service_res) |
-            CheckResult::Elasticsearch(service_res) => {
+            CheckResult::Postgres(service_res)
+            | CheckResult::Redis(service_res)
+            | CheckResult::RabbitMQ(service_res)
+            | CheckResult::Kafka(service_res)
+            | CheckResult::MySQL(service_res)
+            | CheckResult::MongoDB(service_res)
+            | CheckResult::Elasticsearch(service_res) => {
                 let error_msg = if !is_healthy_now {
                     match &service_res.status {
                         CheckStatus::Unhealthy(msg) => Some(msg.clone()),
@@ -596,7 +661,7 @@ async fn update_service_status(
                     None
                 };
                 (Some(service_res.response_time_ms), error_msg)
-            },
+            }
             _ => (None, None),
         };
 
@@ -604,28 +669,35 @@ async fn update_service_status(
 
         if status_entry.is_healthy {
             if status_entry.consecutive_failures > 0 {
-                info!("Target {} has recovered. Was unhealthy for {} checks.", alias, status_entry.consecutive_failures);
+                info!(
+                    "Target {} has recovered. Was unhealthy for {} checks.",
+                    alias, status_entry.consecutive_failures
+                );
             }
             status_entry.consecutive_failures = 0;
         } else {
             status_entry.consecutive_failures += 1;
             let reason_str = match &current_check_result {
-                CheckResult::Postgres(service_res) |
-                CheckResult::Redis(service_res) |
-                CheckResult::RabbitMQ(service_res) |
-                CheckResult::Kafka(service_res) |
-                CheckResult::MySQL(service_res) |
-                CheckResult::MongoDB(service_res) |
-                CheckResult::Elasticsearch(service_res) => {
-                    match &service_res.status {
-                        CheckStatus::Unhealthy(msg) => msg.clone(),
-                        _ => format!("Unknown {} error", check_type),
-                    }
+                CheckResult::Postgres(service_res)
+                | CheckResult::Redis(service_res)
+                | CheckResult::RabbitMQ(service_res)
+                | CheckResult::Kafka(service_res)
+                | CheckResult::MySQL(service_res)
+                | CheckResult::MongoDB(service_res)
+                | CheckResult::Elasticsearch(service_res) => match &service_res.status {
+                    CheckStatus::Unhealthy(msg) => msg.clone(),
+                    _ => format!("Unknown {} error", check_type),
                 },
                 _ => format!("Unknown {} error", check_type),
             };
-            warn!("Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: {}", alias, reason_str, status_entry.consecutive_failures, check_type);
+            warn!(
+                "Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: {}",
+                alias, reason_str, status_entry.consecutive_failures, check_type
+            );
         }
-        debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}", alias, status_entry.is_healthy, status_entry.consecutive_failures);
+        debug!(
+            "[{}] Updated status. Healthy: {}, Consecutive Failures: {}",
+            alias, status_entry.is_healthy, status_entry.consecutive_failures
+        );
     }
 }
