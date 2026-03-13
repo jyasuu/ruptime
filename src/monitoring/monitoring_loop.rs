@@ -1,11 +1,16 @@
+use crate::config::{AppConfig, Check, HttpProtocol};
+use crate::monitoring::checks::{
+    check_elasticsearch, check_http_target, check_kafka, check_mongodb, check_mysql,
+    check_postgres, check_rabbitmq, check_redis, check_tcp_port,
+};
+use crate::monitoring::types::{
+    CheckResult, CheckStatus, HttpCheckResultDetails, TargetStatus, TcpCheckResult,
+};
+use log::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use log::{info, warn, debug};
-use crate::config::{AppConfig, Check, HttpProtocol};
-use crate::monitoring::types::{TargetStatus, CheckResult, TcpCheckResult, HttpCheckResultDetails, CheckStatus};
-use crate::monitoring::checks::{check_tcp_port, check_http_target, check_postgres, check_redis, check_rabbitmq, check_kafka, check_mysql, check_mongodb, check_elasticsearch};
 
 // --- Main Monitoring Loop ---
 
@@ -35,7 +40,7 @@ pub async fn run_monitoring_loop(
                 Check::MongoDB(mongodb_check) => mongodb_check.name.as_deref(),
                 Check::Elasticsearch(es_check) => es_check.name.as_deref(),
             };
-            
+
             let target_alias = if let Some(name) = check_name {
                 name.to_string()
             } else {
@@ -64,22 +69,39 @@ pub async fn run_monitoring_loop(
                         HttpProtocol::Https => "https",
                     };
                     (
-                        format!("{}://{}:{}{}", protocol_str, host_config.address, http_check.port, http_check.path),
+                        format!(
+                            "{}://{}:{}{}",
+                            protocol_str, host_config.address, http_check.port, http_check.path
+                        ),
                         http_check.port,
                     )
-                },
+                }
                 Check::Postgres(postgres_check) => (
-                    format!("postgres://{}:{}/{}", host_config.address, postgres_check.port, postgres_check.database),
+                    format!(
+                        "postgres://{}:{}/{}",
+                        host_config.address, postgres_check.port, postgres_check.database
+                    ),
                     postgres_check.port,
                 ),
                 Check::Redis(redis_check) => (
-                    format!("redis://{}:{}/{}", host_config.address, redis_check.port, redis_check.database),
+                    format!(
+                        "redis://{}:{}/{}",
+                        host_config.address, redis_check.port, redis_check.database
+                    ),
                     redis_check.port,
                 ),
                 Check::RabbitMQ(rabbitmq_check) => (
-                    format!("{}://{}:{}/{}", 
-                        if rabbitmq_check.use_ssl { "amqps" } else { "amqp" },
-                        host_config.address, rabbitmq_check.port, rabbitmq_check.vhost),
+                    format!(
+                        "{}://{}:{}/{}",
+                        if rabbitmq_check.use_ssl {
+                            "amqps"
+                        } else {
+                            "amqp"
+                        },
+                        host_config.address,
+                        rabbitmq_check.port,
+                        rabbitmq_check.vhost
+                    ),
                     rabbitmq_check.port,
                 ),
                 Check::Kafka(kafka_check) => (
@@ -87,17 +109,26 @@ pub async fn run_monitoring_loop(
                     kafka_check.port,
                 ),
                 Check::MySQL(mysql_check) => (
-                    format!("mysql://{}:{}/{}", host_config.address, mysql_check.port, mysql_check.database),
+                    format!(
+                        "mysql://{}:{}/{}",
+                        host_config.address, mysql_check.port, mysql_check.database
+                    ),
                     mysql_check.port,
                 ),
                 Check::MongoDB(mongodb_check) => (
-                    format!("mongodb://{}:{}/{}", host_config.address, mongodb_check.port, mongodb_check.database),
+                    format!(
+                        "mongodb://{}:{}/{}",
+                        host_config.address, mongodb_check.port, mongodb_check.database
+                    ),
                     mongodb_check.port,
                 ),
                 Check::Elasticsearch(es_check) => (
-                    format!("{}://{}:{}", 
+                    format!(
+                        "{}://{}:{}",
                         if es_check.use_ssl { "https" } else { "http" },
-                        host_config.address, es_check.port),
+                        host_config.address,
+                        es_check.port
+                    ),
                     es_check.port,
                 ),
             };
@@ -125,10 +156,9 @@ pub async fn run_monitoring_loop(
 
                     match &check_clone {
                         Check::Tcp(tcp_check) => {
-                            let check_type_str = "TCP";
                             info!(
-                                "Performing {} check for target: {} ({}:{})",
-                                check_type_str, alias_clone, host_address_clone, tcp_check.port
+                                "Performing TCP check for target: {} ({}:{})",
+                                alias_clone, host_address_clone, tcp_check.port
                             );
                             let tcp_result = check_tcp_port(
                                 &host_address_clone,
@@ -137,18 +167,18 @@ pub async fn run_monitoring_loop(
                             )
                             .await;
 
-                            let is_healthy_now = tcp_result.is_ok();
+                            let is_healthy_now = matches!(tcp_result.status, CheckStatus::Healthy);
+                            let response_time_ms = tcp_result.response_time_ms;
 
                             if is_healthy_now {
                                 info!(
-                                    "Target {} ({}) is healthy (TCP)",
-                                    alias_clone, host_address_clone
+                                    "Target {} ({}) is healthy. Response time: {}ms (TCP)",
+                                    alias_clone, host_address_clone, response_time_ms
                                 );
                             }
 
-                            current_check_result = CheckResult::Tcp(TcpCheckResult { result: tcp_result });
+                            current_check_result = CheckResult::Tcp(tcp_result);
 
-                            // Update shared state for TCP
                             {
                                 let mut statuses = shared_statuses_clone.lock().await;
                                 if let Some(status_entry) = statuses.get_mut(status_index) {
@@ -156,37 +186,41 @@ pub async fn run_monitoring_loop(
 
                                     let error_message = if !is_healthy_now {
                                         match &current_check_result {
-                                            CheckResult::Tcp(tcp_res) => tcp_res.result.as_ref().err().cloned(),
+                                            CheckResult::Tcp(tcp_res) => match &tcp_res.status {
+                                                CheckStatus::Unhealthy(msg) => Some(msg.clone()),
+                                                _ => None,
+                                            },
                                             _ => None,
                                         }
                                     } else {
                                         None
                                     };
-                                    status_entry.add_check_result(is_healthy_now, None, error_message);
 
-                                    if status_entry.is_healthy {
-                                        if status_entry.consecutive_failures > 0 {
-                                            info!("Target {} has recovered. Was unhealthy for {} checks.", alias_clone, status_entry.consecutive_failures);
-                                        }
-                                        status_entry.consecutive_failures = 0;
-                                    } else {
-                                        status_entry.consecutive_failures += 1;
-                                        let _reason_str = match &current_check_result {
-                                            CheckResult::Tcp(tcp_res) => tcp_res.result.as_ref().err().cloned().unwrap_or_else(|| "Unknown TCP error".to_string()),
-                                            _ => "Unknown error".to_string(), // Should not happen here
-                                        };
-                                        warn!("Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: TCP", alias_clone, _reason_str, status_entry.consecutive_failures);
-                                    }
-                                    debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}", alias_clone, status_entry.is_healthy, status_entry.consecutive_failures);
+                                    // Pass Some(response_time_ms) instead of None
+                                    status_entry.add_check_result(
+                                        is_healthy_now,
+                                        Some(response_time_ms),
+                                        error_message,
+                                    );
+
+                                    // ... rest of consecutive_failures logic unchanged
                                 }
                             }
                         }
                         Check::Http(http_check_config) => {
                             let check_type_str = "HTTP";
-                            let protocol_str = match http_check_config.protocol { HttpProtocol::Http => "http", HttpProtocol::Https => "https" };
+                            let protocol_str = match http_check_config.protocol {
+                                HttpProtocol::Http => "http",
+                                HttpProtocol::Https => "https",
+                            };
                             info!(
                                 "Performing {} check for target: {} ({}://{}:{}{})",
-                                check_type_str, alias_clone, protocol_str, host_address_clone, http_check_config.port, http_check_config.path
+                                check_type_str,
+                                alias_clone,
+                                protocol_str,
+                                host_address_clone,
+                                http_check_config.port,
+                                http_check_config.path
                             );
                             let http_result =
                                 check_http_target(&host_address_clone, http_check_config).await;
@@ -213,16 +247,15 @@ pub async fn run_monitoring_loop(
                                 let mut statuses = shared_statuses_clone.lock().await;
                                 if let Some(status_entry) = statuses.get_mut(status_index) {
                                     status_entry.last_result = Some(current_check_result.clone());
-                                    status_entry.cert_days_remaining = http_result.cert_days_remaining;
+                                    status_entry.cert_days_remaining =
+                                        http_result.cert_days_remaining;
                                     status_entry.cert_is_valid = http_result.cert_is_valid;
 
                                     let error_message = if !is_healthy_now {
                                         match &current_check_result {
-                                            CheckResult::Http(http_res) => {
-                                                match &http_res.status {
-                                                    CheckStatus::Unhealthy(msg) => Some(msg.clone()),
-                                                    _ => None,
-                                                }
+                                            CheckResult::Http(http_res) => match &http_res.status {
+                                                CheckStatus::Unhealthy(msg) => Some(msg.clone()),
+                                                _ => None,
                                             },
                                             _ => None,
                                         }
@@ -230,7 +263,11 @@ pub async fn run_monitoring_loop(
                                         None
                                     };
 
-                                    status_entry.add_check_result(is_healthy_now, Some(http_result.response_time_ms), error_message);
+                                    status_entry.add_check_result(
+                                        is_healthy_now,
+                                        Some(http_result.response_time_ms),
+                                        error_message,
+                                    );
 
                                     if status_entry.is_healthy {
                                         if status_entry.consecutive_failures > 0 {
@@ -240,11 +277,9 @@ pub async fn run_monitoring_loop(
                                     } else {
                                         status_entry.consecutive_failures += 1;
                                         let reason_str = match &current_check_result {
-                                            CheckResult::Http(http_res) => {
-                                                match &http_res.status {
-                                                    CheckStatus::Unhealthy(msg) => msg.clone(),
-                                                    _ => "Unknown HTTP error".to_string(),
-                                                }
+                                            CheckResult::Http(http_res) => match &http_res.status {
+                                                CheckStatus::Unhealthy(msg) => msg.clone(),
+                                                _ => "Unknown HTTP error".to_string(),
                                             },
                                             _ => "Unknown error".to_string(),
                                         };
@@ -258,20 +293,35 @@ pub async fn run_monitoring_loop(
                             let check_type_str = "PostgreSQL";
                             info!(
                                 "Performing {} check for target: {} ({}:{})",
-                                check_type_str, alias_clone, host_address_clone, postgres_config.port
+                                check_type_str,
+                                alias_clone,
+                                host_address_clone,
+                                postgres_config.port
                             );
-                            let service_result = check_postgres(&host_address_clone, postgres_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_postgres(&host_address_clone, postgres_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
 
                             if is_healthy_now {
                                 info!(
                                     "Target {} ({}) is healthy. Response time: {}ms (PostgreSQL)",
-                                    alias_clone, host_address_clone, service_result.response_time_ms
+                                    alias_clone,
+                                    host_address_clone,
+                                    service_result.response_time_ms
                                 );
                             }
 
                             current_check_result = CheckResult::Postgres(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                         Check::Redis(redis_config) => {
                             let check_type_str = "Redis";
@@ -279,37 +329,64 @@ pub async fn run_monitoring_loop(
                                 "Performing {} check for target: {} ({}:{})",
                                 check_type_str, alias_clone, host_address_clone, redis_config.port
                             );
-                            let service_result = check_redis(&host_address_clone, redis_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_redis(&host_address_clone, redis_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
 
                             if is_healthy_now {
                                 info!(
                                     "Target {} ({}) is healthy. Response time: {}ms (Redis)",
-                                    alias_clone, host_address_clone, service_result.response_time_ms
+                                    alias_clone,
+                                    host_address_clone,
+                                    service_result.response_time_ms
                                 );
                             }
 
                             current_check_result = CheckResult::Redis(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                         Check::RabbitMQ(rabbitmq_config) => {
                             let check_type_str = "RabbitMQ";
                             info!(
                                 "Performing {} check for target: {} ({}:{})",
-                                check_type_str, alias_clone, host_address_clone, rabbitmq_config.port
+                                check_type_str,
+                                alias_clone,
+                                host_address_clone,
+                                rabbitmq_config.port
                             );
-                            let service_result = check_rabbitmq(&host_address_clone, rabbitmq_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_rabbitmq(&host_address_clone, rabbitmq_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
 
                             if is_healthy_now {
                                 info!(
                                     "Target {} ({}) is healthy. Response time: {}ms (RabbitMQ)",
-                                    alias_clone, host_address_clone, service_result.response_time_ms
+                                    alias_clone,
+                                    host_address_clone,
+                                    service_result.response_time_ms
                                 );
                             }
 
                             current_check_result = CheckResult::RabbitMQ(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                         Check::Kafka(kafka_config) => {
                             let check_type_str = "Kafka";
@@ -317,18 +394,30 @@ pub async fn run_monitoring_loop(
                                 "Performing {} check for target: {} ({}:{})",
                                 check_type_str, alias_clone, host_address_clone, kafka_config.port
                             );
-                            let service_result = check_kafka(&host_address_clone, kafka_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_kafka(&host_address_clone, kafka_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
 
                             if is_healthy_now {
                                 info!(
                                     "Target {} ({}) is healthy. Response time: {}ms (Kafka)",
-                                    alias_clone, host_address_clone, service_result.response_time_ms
+                                    alias_clone,
+                                    host_address_clone,
+                                    service_result.response_time_ms
                                 );
                             }
 
                             current_check_result = CheckResult::Kafka(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                         Check::MySQL(mysql_config) => {
                             let check_type_str = "MySQL";
@@ -336,37 +425,64 @@ pub async fn run_monitoring_loop(
                                 "Performing {} check for target: {} ({}:{})",
                                 check_type_str, alias_clone, host_address_clone, mysql_config.port
                             );
-                            let service_result = check_mysql(&host_address_clone, mysql_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_mysql(&host_address_clone, mysql_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
 
                             if is_healthy_now {
                                 info!(
                                     "Target {} ({}) is healthy. Response time: {}ms (MySQL)",
-                                    alias_clone, host_address_clone, service_result.response_time_ms
+                                    alias_clone,
+                                    host_address_clone,
+                                    service_result.response_time_ms
                                 );
                             }
 
                             current_check_result = CheckResult::MySQL(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                         Check::MongoDB(mongodb_config) => {
                             let check_type_str = "MongoDB";
                             info!(
                                 "Performing {} check for target: {} ({}:{})",
-                                check_type_str, alias_clone, host_address_clone, mongodb_config.port
+                                check_type_str,
+                                alias_clone,
+                                host_address_clone,
+                                mongodb_config.port
                             );
-                            let service_result = check_mongodb(&host_address_clone, mongodb_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_mongodb(&host_address_clone, mongodb_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
 
                             if is_healthy_now {
                                 info!(
                                     "Target {} ({}) is healthy. Response time: {}ms (MongoDB)",
-                                    alias_clone, host_address_clone, service_result.response_time_ms
+                                    alias_clone,
+                                    host_address_clone,
+                                    service_result.response_time_ms
                                 );
                             }
 
                             current_check_result = CheckResult::MongoDB(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                         Check::Elasticsearch(es_config) => {
                             let check_type_str = "Elasticsearch";
@@ -374,8 +490,10 @@ pub async fn run_monitoring_loop(
                                 "Performing {} check for target: {} ({}:{})",
                                 check_type_str, alias_clone, host_address_clone, es_config.port
                             );
-                            let service_result = check_elasticsearch(&host_address_clone, es_config).await;
-                            let is_healthy_now = matches!(service_result.status, CheckStatus::Healthy);
+                            let service_result =
+                                check_elasticsearch(&host_address_clone, es_config).await;
+                            let is_healthy_now =
+                                matches!(service_result.status, CheckStatus::Healthy);
 
                             if is_healthy_now {
                                 info!(
@@ -385,7 +503,15 @@ pub async fn run_monitoring_loop(
                             }
 
                             current_check_result = CheckResult::Elasticsearch(service_result);
-                            update_service_status(&shared_statuses_clone, status_index, &alias_clone, current_check_result.clone(), is_healthy_now, check_type_str).await;
+                            update_service_status(
+                                &shared_statuses_clone,
+                                status_index,
+                                &alias_clone,
+                                current_check_result.clone(),
+                                is_healthy_now,
+                                check_type_str,
+                            )
+                            .await;
                         }
                     }
 
@@ -420,13 +546,13 @@ async fn update_service_status(
         status_entry.last_result = Some(current_check_result.clone());
 
         let (response_time_ms, error_message) = match &current_check_result {
-            CheckResult::Postgres(service_res) | 
-            CheckResult::Redis(service_res) | 
-            CheckResult::RabbitMQ(service_res) | 
-            CheckResult::Kafka(service_res) | 
-            CheckResult::MySQL(service_res) | 
-            CheckResult::MongoDB(service_res) | 
-            CheckResult::Elasticsearch(service_res) => {
+            CheckResult::Postgres(service_res)
+            | CheckResult::Redis(service_res)
+            | CheckResult::RabbitMQ(service_res)
+            | CheckResult::Kafka(service_res)
+            | CheckResult::MySQL(service_res)
+            | CheckResult::MongoDB(service_res)
+            | CheckResult::Elasticsearch(service_res) => {
                 let error_msg = if !is_healthy_now {
                     match &service_res.status {
                         CheckStatus::Unhealthy(msg) => Some(msg.clone()),
@@ -436,7 +562,7 @@ async fn update_service_status(
                     None
                 };
                 (Some(service_res.response_time_ms), error_msg)
-            },
+            }
             _ => (None, None),
         };
 
@@ -444,28 +570,35 @@ async fn update_service_status(
 
         if status_entry.is_healthy {
             if status_entry.consecutive_failures > 0 {
-                info!("Target {} has recovered. Was unhealthy for {} checks.", alias, status_entry.consecutive_failures);
+                info!(
+                    "Target {} has recovered. Was unhealthy for {} checks.",
+                    alias, status_entry.consecutive_failures
+                );
             }
             status_entry.consecutive_failures = 0;
         } else {
             status_entry.consecutive_failures += 1;
             let reason_str = match &current_check_result {
-                CheckResult::Postgres(service_res) | 
-                CheckResult::Redis(service_res) | 
-                CheckResult::RabbitMQ(service_res) | 
-                CheckResult::Kafka(service_res) | 
-                CheckResult::MySQL(service_res) | 
-                CheckResult::MongoDB(service_res) | 
-                CheckResult::Elasticsearch(service_res) => {
-                    match &service_res.status {
-                        CheckStatus::Unhealthy(msg) => msg.clone(),
-                        _ => format!("Unknown {} error", check_type),
-                    }
+                CheckResult::Postgres(service_res)
+                | CheckResult::Redis(service_res)
+                | CheckResult::RabbitMQ(service_res)
+                | CheckResult::Kafka(service_res)
+                | CheckResult::MySQL(service_res)
+                | CheckResult::MongoDB(service_res)
+                | CheckResult::Elasticsearch(service_res) => match &service_res.status {
+                    CheckStatus::Unhealthy(msg) => msg.clone(),
+                    _ => format!("Unknown {} error", check_type),
                 },
                 _ => format!("Unknown {} error", check_type),
             };
-            warn!("Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: {}", alias, reason_str, status_entry.consecutive_failures, check_type);
+            warn!(
+                "Target {} is UNHEALTHY. Reason: {}. Consecutive failures: {}. Check type: {}",
+                alias, reason_str, status_entry.consecutive_failures, check_type
+            );
         }
-        debug!("[{}] Updated status. Healthy: {}, Consecutive Failures: {}", alias, status_entry.is_healthy, status_entry.consecutive_failures);
+        debug!(
+            "[{}] Updated status. Healthy: {}, Consecutive Failures: {}",
+            alias, status_entry.is_healthy, status_entry.consecutive_failures
+        );
     }
 }

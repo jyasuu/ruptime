@@ -1,6 +1,6 @@
-use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::time::SystemTime;
 
 // --- Data structures for storing check status ---
 
@@ -19,8 +19,8 @@ pub enum CheckResult {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TcpCheckResult {
-    // Using Result<(), String> directly for simplicity as per current check_tcp_port
-    pub result: Result<(), String>,
+    pub status: CheckStatus,
+    pub response_time_ms: u128,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -118,13 +118,19 @@ where
 }
 
 impl TargetStatus {
-    pub fn new(alias: String, monitor_url: String, monitor_hostname: String, monitor_port: u16) -> Self { // Ensure this is public if called from main
+    pub fn new(
+        alias: String,
+        monitor_url: String,
+        monitor_hostname: String,
+        monitor_port: u16,
+    ) -> Self {
+        // Ensure this is public if called from main
         TargetStatus {
-            target_alias: alias, // Make fields public if accessed directly from api.rs
-            last_check_time: None, // Make fields public
-            last_result: None, // Make fields public
+            target_alias: alias,     // Make fields public if accessed directly from api.rs
+            last_check_time: None,   // Make fields public
+            last_result: None,       // Make fields public
             consecutive_failures: 0, // Make fields public
-            is_healthy: true, // Start with an optimistic state // Make fields public
+            is_healthy: true,        // Start with an optimistic state // Make fields public
             uptime_percentage_24h: 100.0, // Will be calculated from history // Make fields public
             average_response_time_24h_ms: 0.0, // Will be calculated from history // Make fields public
             monitor_url,
@@ -137,9 +143,14 @@ impl TargetStatus {
     }
 
     // Update historical data and calculate metrics
-    pub fn add_check_result(&mut self, is_healthy: bool, response_time_ms: Option<u128>, error_message: Option<String>) {
+    pub fn add_check_result(
+        &mut self,
+        is_healthy: bool,
+        response_time_ms: Option<u128>,
+        error_message: Option<String>,
+    ) {
         let now = SystemTime::now();
-        
+
         // Add new result to history
         self.check_history.push(HistoricalCheckResult {
             timestamp: now,
@@ -147,55 +158,60 @@ impl TargetStatus {
             response_time_ms,
             error_message,
         });
-        
+
         // Keep only last 24 hours of data (assuming checks every 30 seconds = 2880 checks per day)
         const MAX_HISTORY: usize = 2880;
         if self.check_history.len() > MAX_HISTORY {
-            self.check_history.drain(0..(self.check_history.len() - MAX_HISTORY));
+            self.check_history
+                .drain(0..(self.check_history.len() - MAX_HISTORY));
         }
-        
+
         // Calculate 24h metrics
         self.calculate_24h_metrics();
-        
+
         // Update current status
         self.last_check_time = Some(now);
         self.is_healthy = is_healthy;
-        
+
         if is_healthy {
             self.consecutive_failures = 0;
         } else {
             self.consecutive_failures += 1;
         }
     }
-    
+
     fn calculate_24h_metrics(&mut self) {
         if self.check_history.is_empty() {
             return;
         }
-        
+
         let now = SystemTime::now();
         let twenty_four_hours_ago = now - std::time::Duration::from_secs(24 * 60 * 60);
-        
+
         // Filter to last 24 hours
-        let recent_checks: Vec<&HistoricalCheckResult> = self.check_history
+        let recent_checks: Vec<&HistoricalCheckResult> = self
+            .check_history
             .iter()
             .filter(|check| check.timestamp > twenty_four_hours_ago)
             .collect();
-        
+
         if recent_checks.is_empty() {
             return;
         }
-        
+
         // Calculate uptime percentage
-        let healthy_count = recent_checks.iter().filter(|check| check.is_healthy).count();
+        let healthy_count = recent_checks
+            .iter()
+            .filter(|check| check.is_healthy)
+            .count();
         self.uptime_percentage_24h = (healthy_count as f64 / recent_checks.len() as f64) * 100.0;
-        
+
         // Calculate average response time
         let response_times: Vec<u128> = recent_checks
             .iter()
             .filter_map(|check| check.response_time_ms)
             .collect();
-        
+
         if !response_times.is_empty() {
             let sum: u128 = response_times.iter().sum();
             self.average_response_time_24h_ms = sum as f64 / response_times.len() as f64;

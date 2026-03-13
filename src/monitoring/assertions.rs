@@ -1,7 +1,9 @@
-use regex::Regex;
-use crate::config::{HttpAssertion, AssertionQuery, AssertionPredicate, AssertionValue, CertificateField};
+use crate::config::{
+    AssertionPredicate, AssertionQuery, AssertionValue, CertificateField, HttpAssertion,
+};
 use crate::monitoring::types::AssertionResult;
 use jsonpath_lib as jsonpath;
+use regex::Regex;
 
 // Function to evaluate HTTP response assertions
 pub fn evaluate_assertions(
@@ -12,12 +14,18 @@ pub fn evaluate_assertions(
     cert_info: Option<&openssl::x509::X509>,
 ) -> Vec<AssertionResult> {
     let mut results = Vec::new();
-    
+
     for assertion in assertions {
-        let result = evaluate_single_assertion(assertion, response, response_body, response_time_ms, cert_info);
+        let result = evaluate_single_assertion(
+            assertion,
+            response,
+            response_body,
+            response_time_ms,
+            cert_info,
+        );
         results.push(result);
     }
-    
+
     results
 }
 
@@ -31,19 +39,19 @@ pub fn evaluate_assertions_with_data(
     cert_info: Option<&openssl::x509::X509>,
 ) -> Vec<AssertionResult> {
     let mut results = Vec::new();
-    
+
     for assertion in assertions {
         let result = evaluate_single_assertion_with_data(
-            assertion, 
-            response_status, 
-            response_headers, 
-            response_body, 
-            response_time_ms, 
-            cert_info
+            assertion,
+            response_status,
+            response_headers,
+            response_body,
+            response_time_ms,
+            cert_info,
         );
         results.push(result);
     }
-    
+
     results
 }
 
@@ -73,96 +81,99 @@ fn evaluate_single_assertion_with_data(
     cert_info: Option<&openssl::x509::X509>,
 ) -> AssertionResult {
     let query_result = match &assertion.query {
-        AssertionQuery::Status => {
-            Some(serde_json::Value::Number(serde_json::Number::from(response_status.as_u16())))
-        },
-        AssertionQuery::Header { name } => {
-            response_headers.get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| serde_json::Value::String(s.to_string()))
-        },
-        AssertionQuery::Body => {
-            Some(serde_json::Value::String(response_body.to_string()))
-        },
+        AssertionQuery::Status => Some(serde_json::Value::Number(serde_json::Number::from(
+            response_status.as_u16(),
+        ))),
+        AssertionQuery::Header { name } => response_headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| serde_json::Value::String(s.to_string())),
+        AssertionQuery::Body => Some(serde_json::Value::String(response_body.to_string())),
         AssertionQuery::JsonPath { path } => {
             match serde_json::from_str::<serde_json::Value>(response_body) {
-                Ok(json) => {
-                    match jsonpath::select(&json, path) {
-                        Ok(results) => {
-                            if results.is_empty() {
-                                None
-                            } else if results.len() == 1 {
-                                Some(results[0].clone())
-                            } else {
-                                Some(serde_json::Value::Array(results.into_iter().cloned().collect()))
-                            }
-                        },
-                        Err(_) => None,
+                Ok(json) => match jsonpath::select(&json, path) {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            None
+                        } else if results.len() == 1 {
+                            Some(results[0].clone())
+                        } else {
+                            Some(serde_json::Value::Array(
+                                results.into_iter().cloned().collect(),
+                            ))
+                        }
                     }
+                    Err(_) => None,
                 },
                 Err(_) => None,
             }
-        },
-        AssertionQuery::Regex { pattern } => {
-            match Regex::new(pattern) {
-                Ok(re) => {
-                    if let Some(captures) = re.captures(response_body) {
-                        if let Some(matched) = captures.get(0) {
-                            Some(serde_json::Value::String(matched.as_str().to_string()))
-                        } else {
-                            None
-                        }
+        }
+        AssertionQuery::Regex { pattern } => match Regex::new(pattern) {
+            Ok(re) => {
+                if let Some(captures) = re.captures(response_body) {
+                    if let Some(matched) = captures.get(0) {
+                        Some(serde_json::Value::String(matched.as_str().to_string()))
                     } else {
                         None
                     }
-                },
-                Err(_) => None,
+                } else {
+                    None
+                }
             }
+            Err(_) => None,
         },
         AssertionQuery::Cookie { name } => {
             // Extract cookie from response headers
-            response_headers.get("set-cookie")
+            response_headers
+                .get("set-cookie")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|cookies| {
-                    cookies.split(';')
+                    cookies
+                        .split(';')
                         .find(|cookie| cookie.trim().starts_with(&format!("{}=", name)))
                         .and_then(|cookie| cookie.split('=').nth(1))
                         .map(|value| serde_json::Value::String(value.trim().to_string()))
                 })
-        },
-        AssertionQuery::Duration => {
-            Some(serde_json::Value::Number(serde_json::Number::from(response_time_ms as u64)))
-        },
+        }
+        AssertionQuery::Duration => Some(serde_json::Value::Number(serde_json::Number::from(
+            response_time_ms as u64,
+        ))),
         AssertionQuery::Certificate { field } => {
             cert_info.and_then(|cert| {
                 match field {
                     CertificateField::Subject => {
                         // Use a safe string representation for X509Name
-                        Some(serde_json::Value::String(format!("{:?}", cert.subject_name())))
-                    },
-                    CertificateField::Issuer => {
-                        Some(serde_json::Value::String(format!("{:?}", cert.issuer_name())))
-                    },
-                    CertificateField::Serial => {
-                        cert.serial_number().to_bn().ok()
-                            .map(|bn| serde_json::Value::String(bn.to_string()))
-                    },
+                        Some(serde_json::Value::String(format!(
+                            "{:?}",
+                            cert.subject_name()
+                        )))
+                    }
+                    CertificateField::Issuer => Some(serde_json::Value::String(format!(
+                        "{:?}",
+                        cert.issuer_name()
+                    ))),
+                    CertificateField::Serial => cert
+                        .serial_number()
+                        .to_bn()
+                        .ok()
+                        .map(|bn| serde_json::Value::String(bn.to_string())),
                     CertificateField::NotBefore => {
                         Some(serde_json::Value::String(format!("{}", cert.not_before())))
-                    },
+                    }
                     CertificateField::NotAfter => {
                         Some(serde_json::Value::String(format!("{}", cert.not_after())))
-                    },
-                    CertificateField::Algorithm => {
-                        Some(serde_json::Value::String(format!("{:?}", cert.signature_algorithm().object())))
-                    },
+                    }
+                    CertificateField::Algorithm => Some(serde_json::Value::String(format!(
+                        "{:?}",
+                        cert.signature_algorithm().object()
+                    ))),
                 }
             })
-        },
+        }
         AssertionQuery::XPath { path: _ } => {
             // XPath is not implemented in the current version
             None
-        },
+        }
     };
 
     let query_str = format_query(&assertion.query);
@@ -181,12 +192,15 @@ fn evaluate_single_assertion_with_data(
                 message: if passed {
                     format!("{} {} {} ✓", query_str, predicate_str, expected_str)
                 } else {
-                    format!("{} {} {} (got: {})", query_str, predicate_str, expected_str, actual_str)
+                    format!(
+                        "{} {} {} (got: {})",
+                        query_str, predicate_str, expected_str, actual_str
+                    )
                 },
                 expected: expected_str,
                 actual: Some(actual_str),
             }
-        },
+        }
         None => {
             // Query returned no value
             let passed = matches!(assertion.predicate, AssertionPredicate::NotExists);
@@ -208,7 +222,11 @@ fn evaluate_single_assertion_with_data(
     }
 }
 
-fn evaluate_predicate(predicate: &AssertionPredicate, actual: &serde_json::Value, expected: &AssertionValue) -> bool {
+fn evaluate_predicate(
+    predicate: &AssertionPredicate,
+    actual: &serde_json::Value,
+    expected: &AssertionValue,
+) -> bool {
     match predicate {
         AssertionPredicate::Equals => values_equal(actual, expected),
         AssertionPredicate::NotEquals => !values_equal(actual, expected),
@@ -216,10 +234,14 @@ fn evaluate_predicate(predicate: &AssertionPredicate, actual: &serde_json::Value
         AssertionPredicate::GreaterThanOrEqual => compare_values(actual, expected, |a, b| a >= b),
         AssertionPredicate::LessThan => compare_values(actual, expected, |a, b| a < b),
         AssertionPredicate::LessThanOrEqual => compare_values(actual, expected, |a, b| a <= b),
-        AssertionPredicate::StartsWith => string_predicate(actual, expected, |a, b| a.starts_with(b)),
+        AssertionPredicate::StartsWith => {
+            string_predicate(actual, expected, |a, b| a.starts_with(b))
+        }
         AssertionPredicate::EndsWith => string_predicate(actual, expected, |a, b| a.ends_with(b)),
         AssertionPredicate::Contains => string_predicate(actual, expected, |a, b| a.contains(b)),
-        AssertionPredicate::NotContains => !string_predicate(actual, expected, |a, b| a.contains(b)),
+        AssertionPredicate::NotContains => {
+            !string_predicate(actual, expected, |a, b| a.contains(b))
+        }
         AssertionPredicate::Matches => regex_predicate(actual, expected),
         AssertionPredicate::NotMatches => !regex_predicate(actual, expected),
         AssertionPredicate::Exists => true, // If we got here, value exists
@@ -230,13 +252,11 @@ fn evaluate_predicate(predicate: &AssertionPredicate, actual: &serde_json::Value
         AssertionPredicate::IsFloat => actual.is_f64(),
         AssertionPredicate::IsString => actual.is_string(),
         AssertionPredicate::IsCollection => actual.is_array(),
-        AssertionPredicate::IsEmpty => {
-            match actual {
-                serde_json::Value::Array(arr) => arr.is_empty(),
-                serde_json::Value::Object(obj) => obj.is_empty(),
-                serde_json::Value::String(s) => s.is_empty(),
-                _ => false,
-            }
+        AssertionPredicate::IsEmpty => match actual {
+            serde_json::Value::Array(arr) => arr.is_empty(),
+            serde_json::Value::Object(obj) => obj.is_empty(),
+            serde_json::Value::String(s) => s.is_empty(),
+            _ => false,
         },
         AssertionPredicate::IsIsoDate => is_iso_date(actual),
         AssertionPredicate::IsIpv4 => is_ipv4(actual),
@@ -268,14 +288,14 @@ where
             } else {
                 false
             }
-        },
+        }
         (serde_json::Value::Number(a), AssertionValue::Integer(e)) => {
             if let Some(a_val) = a.as_f64() {
                 op(a_val, *e as f64)
             } else {
                 false
             }
-        },
+        }
         _ => false,
     }
 }
@@ -291,7 +311,9 @@ where
 }
 
 pub fn regex_predicate(actual: &serde_json::Value, expected: &AssertionValue) -> bool {
-    if let (serde_json::Value::String(actual_str), AssertionValue::String(pattern)) = (actual, expected) {
+    if let (serde_json::Value::String(actual_str), AssertionValue::String(pattern)) =
+        (actual, expected)
+    {
         if let Ok(re) = Regex::new(pattern) {
             re.is_match(actual_str)
         } else {

@@ -1,15 +1,15 @@
 // Re-export modules for testing
+pub mod api;
 pub mod config;
 pub mod monitoring;
-pub mod api;
 
 // Application runner function for main and tests
 pub async fn run_app() -> std::io::Result<()> {
+    use crate::monitoring::TargetStatus;
+    use log::{error, info};
+    use std::process;
     use std::sync::Arc;
     use tokio::sync::Mutex;
-    use crate::monitoring::TargetStatus;
-    use std::process;
-    use log::{info, error};
 
     const DEFAULT_CONFIG_FILE_PATH: &str = "config.toml";
     const DEFAULT_SERVER_ADDRESS: &str = "0.0.0.0:8080";
@@ -17,11 +17,11 @@ pub async fn run_app() -> std::io::Result<()> {
     env_logger::init();
     info!("Starting uptime_monitor application");
 
-    let config_path = std::env::var("TEST_CONFIG_PATH")
-        .unwrap_or_else(|_| DEFAULT_CONFIG_FILE_PATH.to_string());
-    
-    let server_address = std::env::var("TEST_SERVER_ADDRESS")
-        .unwrap_or_else(|_| DEFAULT_SERVER_ADDRESS.to_string());
+    let config_path =
+        std::env::var("TEST_CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_FILE_PATH.to_string());
+
+    let server_address =
+        std::env::var("TEST_SERVER_ADDRESS").unwrap_or_else(|_| DEFAULT_SERVER_ADDRESS.to_string());
 
     info!("Using configuration file: {}", config_path);
     info!("Attempting to bind server to: {}", server_address);
@@ -31,14 +31,19 @@ pub async fn run_app() -> std::io::Result<()> {
             info!("Configuration loaded successfully from {}", config_path);
             cfg
         }
-        Err(_e) => { // Error is already logged by load_config
-            error!("Exiting due to configuration load failure from {}.", config_path);
+        Err(_e) => {
+            // Error is already logged by load_config
+            error!(
+                "Exiting due to configuration load failure from {}.",
+                config_path
+            );
             process::exit(1);
         }
     };
 
     let app_config = Arc::new(loaded_config);
-    let shared_target_statuses: Arc<tokio::sync::Mutex<Vec<TargetStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let shared_target_statuses: Arc<tokio::sync::Mutex<Vec<TargetStatus>>> =
+        Arc::new(Mutex::new(Vec::new()));
 
     let app_config_clone = Arc::clone(&app_config);
     let statuses_clone_monitor = Arc::clone(&shared_target_statuses);
@@ -49,11 +54,13 @@ pub async fn run_app() -> std::io::Result<()> {
     });
 
     info!("Attempting to start HTTP server on {}", server_address);
-    if let Err(e) = api::start_web_server(server_address.clone(), shared_target_statuses.clone()).await {
+    if let Err(e) =
+        api::start_web_server(server_address.clone(), shared_target_statuses.clone()).await
+    {
         error!("Failed to start HTTP server on {}: {}", server_address, e);
         process::exit(1); // Exit if server fails to start
     }
-    
+
     Ok(())
 }
 
@@ -61,7 +68,7 @@ pub async fn run_app() -> std::io::Result<()> {
 pub mod test_utils {
     use crate::config::*;
     use serde_json::json;
-    
+
     pub fn create_test_assertion(
         query: AssertionQuery,
         predicate: AssertionPredicate,
@@ -73,7 +80,7 @@ pub mod test_utils {
             value,
         }
     }
-    
+
     pub fn create_mock_response_body() -> String {
         json!({
             "args": {
@@ -90,6 +97,7 @@ pub mod test_utils {
             "user": "testuser",
             "uuid": "550e8400-e29b-41d4-a716-446655440000",
             "timestamp": "2024-01-15T10:30:00Z"
-        }).to_string()
+        })
+        .to_string()
     }
 }

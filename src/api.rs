@@ -1,37 +1,44 @@
+use crate::monitoring::{CheckResult, TargetStatus};
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
+use log::{error, info}; // Added log macros
+use prometheus::process_collector::ProcessCollector;
+use prometheus::{Encoder, Registry, TextEncoder};
+use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex; // Added tokio::sync::Mutex
-use crate::monitoring::{TargetStatus, CheckResult};
-use std::fmt::Write;
-use log::{info, error}; // Added log macros
-use prometheus::{Encoder, TextEncoder, Registry};
-use prometheus::process_collector::ProcessCollector;
 use urlencoding::decode;
 
 const CONTENT_TYPE_PROMETHEUS: &str = "text/plain; version=0.0.4; charset=utf-8";
 const CONTENT_TYPE_SVG: &str = "image/svg+xml; charset=utf-8";
 
 // --- Prometheus Metric Definitions ---
-const HELP_MONITOR_STATUS: &str = "# HELP monitor_status Current health status of the monitor (0=DOWN, 1=UP).";
+const HELP_MONITOR_STATUS: &str =
+    "# HELP monitor_status Current health status of the monitor (0=DOWN, 1=UP).";
 const TYPE_MONITOR_STATUS: &str = "# TYPE monitor_status gauge";
 
-const HELP_MONITOR_RESPONSE_TIME: &str = "# HELP monitor_response_time Last response time in milliseconds for HTTP/S checks.";
+const HELP_MONITOR_RESPONSE_TIME: &str =
+    "# HELP monitor_response_time Last response time in milliseconds for HTTP/S checks.";
 const TYPE_MONITOR_RESPONSE_TIME: &str = "# TYPE monitor_response_time gauge";
 
-const HELP_MONITOR_CONSECUTIVE_FAILURES: &str = "# HELP monitor_consecutive_failures Total number of consecutive failures for the monitor.";
+const HELP_MONITOR_CONSECUTIVE_FAILURES: &str =
+    "# HELP monitor_consecutive_failures Total number of consecutive failures for the monitor.";
 const TYPE_MONITOR_CONSECUTIVE_FAILURES: &str = "# TYPE monitor_consecutive_failures gauge"; // Changed to gauge as per common practice for this type of metric
 
-const HELP_MONITOR_CERT_DAYS_REMAINING: &str = "# HELP monitor_cert_days_remaining The number of days remaining until the certificate expires";
+const HELP_MONITOR_CERT_DAYS_REMAINING: &str =
+    "# HELP monitor_cert_days_remaining The number of days remaining until the certificate expires";
 const TYPE_MONITOR_CERT_DAYS_REMAINING: &str = "# TYPE monitor_cert_days_remaining gauge";
 
-const HELP_MONITOR_CERT_IS_VALID: &str = "# HELP monitor_cert_is_valid Is the certificate still valid? (1 = Yes, 0 = No)";
+const HELP_MONITOR_CERT_IS_VALID: &str =
+    "# HELP monitor_cert_is_valid Is the certificate still valid? (1 = Yes, 0 = No)";
 const TYPE_MONITOR_CERT_IS_VALID: &str = "# TYPE monitor_cert_is_valid gauge";
 // --- End Prometheus Metric Definitions ---
 
-
 // Helper to escape label values for Prometheus
 fn escape_label_value(value: &str) -> String {
-    value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+    value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
 }
 
 // Helper to escape text for SVG
@@ -53,28 +60,28 @@ fn generate_svg_badge(
 ) -> String {
     let label_escaped = escape_svg_text(label);
     let message_escaped = escape_svg_text(message);
-    
+
     // Calculate text widths (approximate)
     let label_width = label.len() * 7 + 10;
     let message_width = message.len() * 7 + 10;
     let total_width = label_width + message_width;
-    
+
     let mut additional_info = String::new();
     let mut badge_height = 20;
-    
+
     // Add response time and uptime if available
     if response_time.is_some() || uptime.is_some() {
         badge_height = 35;
         let mut info_parts = Vec::new();
-        
+
         if let Some(rt) = response_time {
             info_parts.push(format!("{}ms", rt));
         }
-        
+
         if let Some(up) = uptime {
             info_parts.push(format!("{:.1}% uptime", up));
         }
-        
+
         let info_text = info_parts.join(" | ");
         additional_info = format!(
             "<text x=\"{}\" y=\"30\" text-anchor=\"middle\" font-family=\"Verdana,sans-serif\" font-size=\"9\" fill=\"#333\">{}</text>",
@@ -113,7 +120,6 @@ fn generate_svg_badge(
     )
 }
 
-
 #[get("/badge/{target_alias}")]
 async fn badge_handler(
     path: web::Path<String>,
@@ -124,12 +130,14 @@ async fn badge_handler(
         Ok(decoded) => decoded.to_string(),
         Err(_) => target_alias, // Use original if decoding fails
     };
-    
+
     let statuses = data.lock().await;
-    
+
     // Find the target status by alias
-    let target_status = statuses.iter().find(|status| status.target_alias == decoded_alias);
-    
+    let target_status = statuses
+        .iter()
+        .find(|status| status.target_alias == decoded_alias);
+
     match target_status {
         Some(status) => {
             let (message, color) = if status.is_healthy {
@@ -137,12 +145,12 @@ async fn badge_handler(
             } else {
                 ("DOWN", "#e05d44")
             };
-            
+
             let response_time = match &status.last_result {
                 Some(CheckResult::Http(http_details)) => Some(http_details.response_time_ms),
                 _ => None,
             };
-            
+
             let svg = generate_svg_badge(
                 &status.target_alias,
                 message,
@@ -150,20 +158,12 @@ async fn badge_handler(
                 response_time,
                 Some(status.uptime_percentage_24h as f32),
             );
-            
-            HttpResponse::Ok()
-                .content_type(CONTENT_TYPE_SVG)
-                .body(svg)
+
+            HttpResponse::Ok().content_type(CONTENT_TYPE_SVG).body(svg)
         }
         None => {
-            let svg = generate_svg_badge(
-                &decoded_alias,
-                "NOT FOUND",
-                "#9f9f9f",
-                None,
-                None,
-            );
-            
+            let svg = generate_svg_badge(&decoded_alias, "NOT FOUND", "#9f9f9f", None, None);
+
             HttpResponse::NotFound()
                 .content_type(CONTENT_TYPE_SVG)
                 .body(svg)
@@ -181,10 +181,12 @@ async fn simple_badge_handler(
         Ok(decoded) => decoded.to_string(),
         Err(_) => target_alias,
     };
-    
+
     let statuses = data.lock().await;
-    let target_status = statuses.iter().find(|status| status.target_alias == decoded_alias);
-    
+    let target_status = statuses
+        .iter()
+        .find(|status| status.target_alias == decoded_alias);
+
     match target_status {
         Some(status) => {
             let (message, color) = if status.is_healthy {
@@ -192,7 +194,7 @@ async fn simple_badge_handler(
             } else {
                 ("DOWN", "#e05d44")
             };
-            
+
             let svg = generate_svg_badge(
                 &status.target_alias,
                 message,
@@ -200,20 +202,12 @@ async fn simple_badge_handler(
                 None, // No additional info for simple badge
                 None,
             );
-            
-            HttpResponse::Ok()
-                .content_type(CONTENT_TYPE_SVG)
-                .body(svg)
+
+            HttpResponse::Ok().content_type(CONTENT_TYPE_SVG).body(svg)
         }
         None => {
-            let svg = generate_svg_badge(
-                &decoded_alias,
-                "NOT FOUND",
-                "#9f9f9f",
-                None,
-                None,
-            );
-            
+            let svg = generate_svg_badge(&decoded_alias, "NOT FOUND", "#9f9f9f", None, None);
+
             HttpResponse::NotFound()
                 .content_type(CONTENT_TYPE_SVG)
                 .body(svg)
@@ -224,16 +218,18 @@ async fn simple_badge_handler(
 #[get("/badges")]
 async fn badges_list_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl Responder {
     let statuses = data.lock().await;
-    
+
     let mut html = String::new();
     html.push_str("<!DOCTYPE html><html><head><title>Uptime Monitor Badges</title>");
     html.push_str("<style>body { font-family: Arial, sans-serif; margin: 40px; }");
     html.push_str(".badge-item { margin: 15px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }");
-    html.push_str(".badge-url { font-family: monospace; background: #f5f5f5; padding: 5px; margin: 5px 0; }");
+    html.push_str(
+        ".badge-url { font-family: monospace; background: #f5f5f5; padding: 5px; margin: 5px 0; }",
+    );
     html.push_str("</style></head><body>");
     html.push_str("<h1>Uptime Monitor Badges</h1>");
     html.push_str("<p>Available SVG badges for all monitored targets:</p>");
-    
+
     for status in statuses.iter() {
         let encoded_alias = urlencoding::encode(&status.target_alias);
         html.push_str(&format!(
@@ -258,9 +254,9 @@ async fn badges_list_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> 
             escape_svg_text(&status.monitor_url)
         ));
     }
-    
+
     html.push_str("</body></html>");
-    
+
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
         .body(html)
@@ -317,10 +313,18 @@ async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl
 
         // monitor_status
         let health_value = if status.is_healthy { 1 } else { 0 };
-        let _ = writeln!(status_metrics_buffer, "monitor_status{{{}}} {}", labels, health_value);
+        let _ = writeln!(
+            status_metrics_buffer,
+            "monitor_status{{{}}} {}",
+            labels, health_value
+        );
 
         // monitor_consecutive_failures
-        let _ = writeln!(consecutive_failures_buffer, "monitor_consecutive_failures{{{}}} {}", labels, status.consecutive_failures);
+        let _ = writeln!(
+            consecutive_failures_buffer,
+            "monitor_consecutive_failures{{{}}} {}",
+            labels, status.consecutive_failures
+        );
 
         // HTTP specific metrics
         if let Some(CheckResult::Http(http_details)) = &status.last_result {
@@ -329,16 +333,32 @@ async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl
             }
 
             // monitor_response_time
-            let _ = writeln!(http_metrics_buffer, "monitor_response_time{{{}}} {}", labels, http_details.response_time_ms);
+            let _ = writeln!(
+                http_metrics_buffer,
+                "monitor_response_time{{{}}} {}",
+                labels, http_details.response_time_ms
+            );
 
             // monitor_cert_days_remaining
             if let Some(days_remaining) = status.cert_days_remaining {
-                let _ = writeln!(http_metrics_buffer, "monitor_cert_days_remaining{{{}}} {}", labels, days_remaining);
+                let _ = writeln!(
+                    http_metrics_buffer,
+                    "monitor_cert_days_remaining{{{}}} {}",
+                    labels, days_remaining
+                );
             }
 
             // monitor_cert_is_valid
-            let cert_valid_value = if status.cert_is_valid.unwrap_or(false) { 1 } else { 0 };
-            let _ = writeln!(http_metrics_buffer, "monitor_cert_is_valid{{{}}} {}", labels, cert_valid_value);
+            let cert_valid_value = if status.cert_is_valid.unwrap_or(false) {
+                1
+            } else {
+                0
+            };
+            let _ = writeln!(
+                http_metrics_buffer,
+                "monitor_cert_is_valid{{{}}} {}",
+                labels, cert_valid_value
+            );
         }
     }
 
@@ -368,12 +388,16 @@ async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl
     // Process Metrics
     let registry = Registry::new();
     let process_collector = ProcessCollector::for_self();
-    registry.register(Box::new(process_collector)).expect("ProcessCollector registration failed");
+    registry
+        .register(Box::new(process_collector))
+        .expect("ProcessCollector registration failed");
 
     let mut buffer = Vec::new();
     let encoder = TextEncoder::new();
     let process_metric_families = registry.gather();
-    encoder.encode(&process_metric_families, &mut buffer).expect("Failed to encode process metrics");
+    encoder
+        .encode(&process_metric_families, &mut buffer)
+        .expect("Failed to encode process metrics");
     let process_metrics_string = String::from_utf8(buffer).unwrap_or_default();
 
     // Combine custom metrics and process metrics
@@ -383,7 +407,6 @@ async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl
     } else {
         format!("{}{}", custom_metrics_output, process_metrics_string)
     };
-
 
     HttpResponse::Ok()
         .content_type(CONTENT_TYPE_PROMETHEUS)
@@ -406,7 +429,8 @@ pub async fn start_web_server(
     .bind(&address)? // Borrow address
     .run()
     .await
-    .map_err(|e| { // Log error if server fails to run
+    .map_err(|e| {
+        // Log error if server fails to run
         error!("HTTP server run failed: {}", e);
         e
     })
@@ -437,7 +461,7 @@ mod tests {
             last_result: check_result,
             consecutive_failures,
             is_healthy,
-            uptime_percentage_24h: 0.0, // Placeholder
+            uptime_percentage_24h: 0.0,        // Placeholder
             average_response_time_24h_ms: 0.0, // Placeholder
             monitor_url: monitor_url.to_string(),
             monitor_hostname: monitor_hostname.to_string(),
@@ -453,7 +477,9 @@ mod tests {
         let statuses = Arc::new(Mutex::new(Vec::<TargetStatus>::new())); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses);
 
-        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let app =
+            actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler))
+                .await;
         let req = actix_test::TestRequest::get().uri("/metrics").to_request();
         let resp = actix_test::call_service(&app, req).await;
 
@@ -477,7 +503,6 @@ mod tests {
         assert!(!body_str.contains(HELP_MONITOR_CERT_IS_VALID));
         assert!(!body_str.contains(TYPE_MONITOR_CERT_IS_VALID));
 
-
         // Check that no actual custom metric data lines are present
         assert!(!body_str.contains("monitor_status{"));
         assert!(!body_str.contains("monitor_consecutive_failures{"));
@@ -487,38 +512,68 @@ mod tests {
     async fn test_metrics_handler_mixed_targets() {
         let statuses_vec = vec![
             create_test_target_status(
-                "Healthy HTTP Cert OK", true, 0, "https://healthy.example.com", "healthy.example.com", 443,
+                "Healthy HTTP Cert OK",
+                true,
+                0,
+                "https://healthy.example.com",
+                "healthy.example.com",
+                443,
                 Some(CheckResult::Http(HttpCheckResultDetails {
                     status: CheckStatus::Healthy,
                     response_time_ms: 120,
                     cert_days_remaining: Some(30),
                     cert_is_valid: Some(true),
-                })), Some(30), Some(true)
+                })),
+                Some(30),
+                Some(true),
             ),
             create_test_target_status(
-                "Unhealthy HTTP No Cert", false, 3, "http://unhealthy.example.com", "unhealthy.example.com", 80,
+                "Unhealthy HTTP No Cert",
+                false,
+                3,
+                "http://unhealthy.example.com",
+                "unhealthy.example.com",
+                80,
                 Some(CheckResult::Http(HttpCheckResultDetails {
                     status: CheckStatus::Unhealthy("Timeout".to_string()),
                     response_time_ms: 5000,
                     cert_days_remaining: None,
                     cert_is_valid: None,
-                })), None, None
+                })),
+                None,
+                None,
             ),
             create_test_target_status(
-                "Healthy TCP", true, 0, "tcp://healthy.tcp.example.com:1234", "healthy.tcp.example.com", 1234,
+                "Healthy TCP",
+                true,
+                0,
+                "tcp://healthy.tcp.example.com:1234",
+                "healthy.tcp.example.com",
+                1234,
                 Some(CheckResult::Tcp(TcpCheckResult { result: Ok(()) })),
-                None, None
+                None,
+                None,
             ),
             create_test_target_status(
-                "Unhealthy TCP", false, 5, "tcp://unhealthy.tcp.example.com:5678", "unhealthy.tcp.example.com", 5678,
-                Some(CheckResult::Tcp(TcpCheckResult { result: Err("Connection refused".to_string()) })),
-                None, None
+                "Unhealthy TCP",
+                false,
+                5,
+                "tcp://unhealthy.tcp.example.com:5678",
+                "unhealthy.tcp.example.com",
+                5678,
+                Some(CheckResult::Tcp(TcpCheckResult {
+                    result: Err("Connection refused".to_string()),
+                })),
+                None,
+                None,
             ),
         ];
         let statuses = Arc::new(Mutex::new(statuses_vec)); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
-        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let app =
+            actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler))
+                .await;
         let req = actix_test::TestRequest::get().uri("/metrics").to_request();
         let resp = actix_test::call_service(&app, req).await;
 
@@ -532,68 +587,118 @@ mod tests {
         // General
         assert_eq!(body_str.matches(HELP_MONITOR_STATUS).count(), 1);
         assert_eq!(body_str.matches(TYPE_MONITOR_STATUS).count(), 1);
-        assert_eq!(body_str.matches(HELP_MONITOR_CONSECUTIVE_FAILURES).count(), 1);
-        assert_eq!(body_str.matches(TYPE_MONITOR_CONSECUTIVE_FAILURES).count(), 1);
+        assert_eq!(
+            body_str.matches(HELP_MONITOR_CONSECUTIVE_FAILURES).count(),
+            1
+        );
+        assert_eq!(
+            body_str.matches(TYPE_MONITOR_CONSECUTIVE_FAILURES).count(),
+            1
+        );
         // HTTP Specific
         assert_eq!(body_str.matches(HELP_MONITOR_RESPONSE_TIME).count(), 1);
         assert_eq!(body_str.matches(TYPE_MONITOR_RESPONSE_TIME).count(), 1);
-        assert_eq!(body_str.matches(HELP_MONITOR_CERT_DAYS_REMAINING).count(), 1);
-        assert_eq!(body_str.matches(TYPE_MONITOR_CERT_DAYS_REMAINING).count(), 1);
+        assert_eq!(
+            body_str.matches(HELP_MONITOR_CERT_DAYS_REMAINING).count(),
+            1
+        );
+        assert_eq!(
+            body_str.matches(TYPE_MONITOR_CERT_DAYS_REMAINING).count(),
+            1
+        );
         assert_eq!(body_str.matches(HELP_MONITOR_CERT_IS_VALID).count(), 1);
         assert_eq!(body_str.matches(TYPE_MONITOR_CERT_IS_VALID).count(), 1);
-
 
         // --- Check Metric Data Lines ---
         // Healthy HTTP Cert OK
         let healthy_http_labels = "monitor_name=\"Healthy HTTP Cert OK\",monitor_type=\"http\",monitor_url=\"https://healthy.example.com\",monitor_hostname=\"healthy.example.com\",monitor_port=\"443\"";
         assert!(body_str.contains(&format!("monitor_status{{{}}} 1", healthy_http_labels)));
-        assert!(body_str.contains(&format!("monitor_consecutive_failures{{{}}} 0", healthy_http_labels)));
-        assert!(body_str.contains(&format!("monitor_response_time{{{}}} 120", healthy_http_labels)));
-        assert!(body_str.contains(&format!("monitor_cert_days_remaining{{{}}} 30", healthy_http_labels)));
-        assert!(body_str.contains(&format!("monitor_cert_is_valid{{{}}} 1", healthy_http_labels)));
+        assert!(body_str.contains(&format!(
+            "monitor_consecutive_failures{{{}}} 0",
+            healthy_http_labels
+        )));
+        assert!(body_str.contains(&format!(
+            "monitor_response_time{{{}}} 120",
+            healthy_http_labels
+        )));
+        assert!(body_str.contains(&format!(
+            "monitor_cert_days_remaining{{{}}} 30",
+            healthy_http_labels
+        )));
+        assert!(body_str.contains(&format!(
+            "monitor_cert_is_valid{{{}}} 1",
+            healthy_http_labels
+        )));
 
         // Unhealthy HTTP No Cert
         let unhealthy_http_labels = "monitor_name=\"Unhealthy HTTP No Cert\",monitor_type=\"http\",monitor_url=\"http://unhealthy.example.com\",monitor_hostname=\"unhealthy.example.com\",monitor_port=\"80\"";
         assert!(body_str.contains(&format!("monitor_status{{{}}} 0", unhealthy_http_labels)));
-        assert!(body_str.contains(&format!("monitor_consecutive_failures{{{}}} 3", unhealthy_http_labels)));
-        assert!(body_str.contains(&format!("monitor_response_time{{{}}} 5000", unhealthy_http_labels)));
+        assert!(body_str.contains(&format!(
+            "monitor_consecutive_failures{{{}}} 3",
+            unhealthy_http_labels
+        )));
+        assert!(body_str.contains(&format!(
+            "monitor_response_time{{{}}} 5000",
+            unhealthy_http_labels
+        )));
         // Cert metrics should NOT be present for this target
-        assert!(!body_str.contains(&format!("monitor_cert_days_remaining{{{}}}", unhealthy_http_labels)));
-        assert!(body_str.contains(&format!("monitor_cert_is_valid{{{}}} 0", unhealthy_http_labels))); // Should be 0 as None is treated as false
+        assert!(!body_str.contains(&format!(
+            "monitor_cert_days_remaining{{{}}}",
+            unhealthy_http_labels
+        )));
+        assert!(body_str.contains(&format!(
+            "monitor_cert_is_valid{{{}}} 0",
+            unhealthy_http_labels
+        ))); // Should be 0 as None is treated as false
 
         // Healthy TCP
         let healthy_tcp_labels = "monitor_name=\"Healthy TCP\",monitor_type=\"tcp\",monitor_url=\"tcp://healthy.tcp.example.com:1234\",monitor_hostname=\"healthy.tcp.example.com\",monitor_port=\"1234\"";
         assert!(body_str.contains(&format!("monitor_status{{{}}} 1", healthy_tcp_labels)));
-        assert!(body_str.contains(&format!("monitor_consecutive_failures{{{}}} 0", healthy_tcp_labels)));
+        assert!(body_str.contains(&format!(
+            "monitor_consecutive_failures{{{}}} 0",
+            healthy_tcp_labels
+        )));
         // HTTP specific metrics should NOT be present
         assert!(!body_str.contains(&format!("monitor_response_time{{{}}}", healthy_tcp_labels)));
-        assert!(!body_str.contains(&format!("monitor_cert_days_remaining{{{}}}", healthy_tcp_labels)));
+        assert!(!body_str.contains(&format!(
+            "monitor_cert_days_remaining{{{}}}",
+            healthy_tcp_labels
+        )));
         assert!(!body_str.contains(&format!("monitor_cert_is_valid{{{}}}", healthy_tcp_labels)));
-
 
         // Unhealthy TCP
         let unhealthy_tcp_labels = "monitor_name=\"Unhealthy TCP\",monitor_type=\"tcp\",monitor_url=\"tcp://unhealthy.tcp.example.com:5678\",monitor_hostname=\"unhealthy.tcp.example.com\",monitor_port=\"5678\"";
         assert!(body_str.contains(&format!("monitor_status{{{}}} 0", unhealthy_tcp_labels)));
-        assert!(body_str.contains(&format!("monitor_consecutive_failures{{{}}} 5", unhealthy_tcp_labels)));
+        assert!(body_str.contains(&format!(
+            "monitor_consecutive_failures{{{}}} 5",
+            unhealthy_tcp_labels
+        )));
     }
 
     #[actix_web::test]
     async fn test_metrics_handler_http_no_cert_info() {
-        let statuses_vec = vec![
-            create_test_target_status(
-                "HTTP No Cert Info", true, 0, "http://no.cert.info", "no.cert.info", 80,
-                Some(CheckResult::Http(HttpCheckResultDetails {
-                    status: CheckStatus::Healthy,
-                    response_time_ms: 75,
-                    cert_days_remaining: None, // Explicitly None
-                    cert_is_valid: None,       // Explicitly None
-                })), None, None // TargetStatus also has None for cert fields
-            ),
-        ];
+        let statuses_vec = vec![create_test_target_status(
+            "HTTP No Cert Info",
+            true,
+            0,
+            "http://no.cert.info",
+            "no.cert.info",
+            80,
+            Some(CheckResult::Http(HttpCheckResultDetails {
+                status: CheckStatus::Healthy,
+                response_time_ms: 75,
+                cert_days_remaining: None, // Explicitly None
+                cert_is_valid: None,       // Explicitly None
+            })),
+            None,
+            None, // TargetStatus also has None for cert fields
+        )];
         let statuses = Arc::new(Mutex::new(statuses_vec)); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
-        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let app =
+            actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler))
+                .await;
         let req = actix_test::TestRequest::get().uri("/metrics").to_request();
         let resp = actix_test::call_service(&app, req).await;
 
@@ -609,24 +714,30 @@ mod tests {
         // cert_is_valid should be 0 if None
         assert!(body_str.contains(&format!("monitor_cert_is_valid{{{}}} 0", labels)));
     }
-     #[actix_web::test]
+    #[actix_web::test]
     async fn test_escape_label_value_in_metrics() {
-        let statuses_vec = vec![
-            create_test_target_status(
-                "name with \"quotes\" and \\backslash and \nnewline", true, 0,
-                "http://label.test/path", "label.test", 80,
-                Some(CheckResult::Http(HttpCheckResultDetails {
-                    status: CheckStatus::Healthy,
-                    response_time_ms: 50,
-                    cert_days_remaining: None,
-                    cert_is_valid: None,
-                })), None, None
-            ),
-        ];
+        let statuses_vec = vec![create_test_target_status(
+            "name with \"quotes\" and \\backslash and \nnewline",
+            true,
+            0,
+            "http://label.test/path",
+            "label.test",
+            80,
+            Some(CheckResult::Http(HttpCheckResultDetails {
+                status: CheckStatus::Healthy,
+                response_time_ms: 50,
+                cert_days_remaining: None,
+                cert_is_valid: None,
+            })),
+            None,
+            None,
+        )];
         let statuses = Arc::new(Mutex::new(statuses_vec)); // Tokio Mutex needs to be used here
         let data = web::Data::new(statuses.clone()); // Clone Arc for app_data
 
-        let app = actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler)).await;
+        let app =
+            actix_test::init_service(App::new().app_data(data.clone()).service(metrics_handler))
+                .await;
         let req = actix_test::TestRequest::get().uri("/metrics").to_request();
         let resp = actix_test::call_service(&app, req).await;
 
@@ -634,7 +745,8 @@ mod tests {
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
         // Verify that the special characters in the alias are escaped in the output
-        let expected_escaped_name = "monitor_name=\"name with \\\"quotes\\\" and \\\\backslash and \\nnewline\"";
+        let expected_escaped_name =
+            "monitor_name=\"name with \\\"quotes\\\" and \\\\backslash and \\nnewline\"";
         assert!(body_str.contains(expected_escaped_name));
         assert!(body_str.contains(&format!("monitor_status{{{},monitor_type=\"http\",monitor_url=\"http://label.test/path\",monitor_hostname=\"label.test\",monitor_port=\"80\"}} 1", expected_escaped_name)));
     }
@@ -649,7 +761,7 @@ mod tests {
         );
         status.is_healthy = is_healthy;
         status.uptime_percentage_24h = if is_healthy { 99.5 } else { 45.2 };
-        
+
         if is_healthy {
             status.last_result = Some(CheckResult::Http(HttpCheckResultDetails {
                 status: CheckStatus::Healthy,
@@ -665,23 +777,19 @@ mod tests {
                 cert_is_valid: Some(false),
             }));
         }
-        
+
         status
     }
 
     #[actix_web::test]
     async fn test_badge_handler_healthy_target() {
-        let statuses = vec![
-            create_test_target_with_alias("Test Website", true),
-        ];
+        let statuses = vec![create_test_target_with_alias("Test Website", true)];
         let shared_statuses = Arc::new(Mutex::new(statuses));
         let data = web::Data::new(shared_statuses);
 
-        let app = actix_test::init_service(
-            App::new()
-                .app_data(data.clone())
-                .service(badge_handler)
-        ).await;
+        let app =
+            actix_test::init_service(App::new().app_data(data.clone()).service(badge_handler))
+                .await;
 
         let req = actix_test::TestRequest::get()
             .uri("/badge/Test%20Website")
@@ -689,7 +797,10 @@ mod tests {
         let resp = actix_test::call_service(&app, req).await;
 
         assert_eq!(resp.status(), 200);
-        assert_eq!(resp.headers().get("content-type").unwrap(), "image/svg+xml; charset=utf-8");
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "image/svg+xml; charset=utf-8"
+        );
 
         let body_bytes = to_bytes(resp.into_body()).await.unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
@@ -705,17 +816,16 @@ mod tests {
 
     #[actix_web::test]
     async fn test_simple_badge_handler() {
-        let statuses = vec![
-            create_test_target_with_alias("Simple Test", true),
-        ];
+        let statuses = vec![create_test_target_with_alias("Simple Test", true)];
         let shared_statuses = Arc::new(Mutex::new(statuses));
         let data = web::Data::new(shared_statuses);
 
         let app = actix_test::init_service(
             App::new()
                 .app_data(data.clone())
-                .service(simple_badge_handler)
-        ).await;
+                .service(simple_badge_handler),
+        )
+        .await;
 
         let req = actix_test::TestRequest::get()
             .uri("/badge/Simple%20Test/simple")
@@ -738,11 +848,9 @@ mod tests {
         let shared_statuses = Arc::new(Mutex::new(statuses));
         let data = web::Data::new(shared_statuses);
 
-        let app = actix_test::init_service(
-            App::new()
-                .app_data(data.clone())
-                .service(badge_handler)
-        ).await;
+        let app =
+            actix_test::init_service(App::new().app_data(data.clone()).service(badge_handler))
+                .await;
 
         let req = actix_test::TestRequest::get()
             .uri("/badge/NonExistent")

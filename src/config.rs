@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
-use std::fs;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::fs;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -27,7 +27,10 @@ pub fn load_config(file_path: &str) -> Result<AppConfig, Box<dyn Error>> {
     match toml::from_str(&contents) {
         Ok(config) => Ok(config),
         Err(e) => {
-            error!("Failed to parse TOML from configuration file '{}': {}", file_path, e);
+            error!(
+                "Failed to parse TOML from configuration file '{}': {}",
+                file_path, e
+            );
             Err(Box::new(e))
         }
     }
@@ -135,7 +138,9 @@ alias = "Example HTTP"
         // Check if the error message indicates a TOML parsing issue
         // This can be specific, like "TOML parse error", "expected table key", etc.
         // For now, a general check for "parse" or "TOML"
-        assert!(err_msg.to_lowercase().contains("toml") || err_msg.to_lowercase().contains("parse"));
+        assert!(
+            err_msg.to_lowercase().contains("toml") || err_msg.to_lowercase().contains("parse")
+        );
     }
 
     #[test]
@@ -153,8 +158,9 @@ alias = "Missing Address Host"
         let loaded_config_addr = load_config(tmp_file_addr.path().to_str().unwrap());
         assert!(loaded_config_addr.is_err());
         let err_msg_addr = loaded_config_addr.err().unwrap().to_string();
-        assert!(err_msg_addr.to_lowercase().contains("missing field `address`"));
-
+        assert!(err_msg_addr
+            .to_lowercase()
+            .contains("missing field `address`"));
 
         // Missing 'port' for a TCP check
         let toml_missing_port_tcp = r#"
@@ -169,8 +175,9 @@ address = "example.com"
         let loaded_config_port_tcp = load_config(tmp_file_port_tcp.path().to_str().unwrap());
         assert!(loaded_config_port_tcp.is_err());
         let err_msg_port_tcp = loaded_config_port_tcp.err().unwrap().to_string();
-        assert!(err_msg_port_tcp.to_lowercase().contains("missing field `port`"));
-
+        assert!(err_msg_port_tcp
+            .to_lowercase()
+            .contains("missing field `port`"));
 
         // Missing 'type' for a check
         let toml_missing_type = r#"
@@ -188,7 +195,10 @@ address = "example.com"
         // or "missing field `type`" depending on how it's structured.
         // Let's check for "missing field `type`" or "invalid type"
         let err_msg_type_lower = loaded_config_type.err().unwrap().to_string().to_lowercase();
-        assert!(err_msg_type_lower.contains("missing field `type`") || err_msg_type_lower.contains("invalid type"));
+        assert!(
+            err_msg_type_lower.contains("missing field `type`")
+                || err_msg_type_lower.contains("invalid type")
+        );
     }
 
     #[test]
@@ -221,10 +231,17 @@ address = "default.tcp.example.com"
         writeln!(tmp_file, "{}", minimal_toml_content).unwrap();
 
         let loaded_config = load_config(tmp_file.path().to_str().unwrap());
-        assert!(loaded_config.is_ok(), "Failed to load minimal config: {:?}", loaded_config.err());
+        assert!(
+            loaded_config.is_ok(),
+            "Failed to load minimal config: {:?}",
+            loaded_config.err()
+        );
         let config = loaded_config.unwrap();
 
-        assert_eq!(config.monitoring_interval_seconds, 60, "Default monitoring interval"); // As per default_monitoring_interval()
+        assert_eq!(
+            config.monitoring_interval_seconds, 60,
+            "Default monitoring interval"
+        ); // As per default_monitoring_interval()
 
         let http_host = &config.hosts[0];
         assert_eq!(http_host.address, "default.example.com");
@@ -232,8 +249,14 @@ address = "default.tcp.example.com"
         if let Check::Http(http_check) = &http_host.checks[0] {
             assert_eq!(http_check.timeout_seconds, 10, "Default HTTP timeout"); // As per default_http_timeout()
             assert_eq!(http_check.check_ssl_certificate, true, "Default SSL check"); // As per default_check_ssl_certificate()
-            assert_eq!(http_check.expected_status_code, 200, "Default expected status code"); // As per default_expected_status_code()
-            assert_eq!(http_check.body_regex_check, None, "Default body regex check");
+            assert_eq!(
+                http_check.expected_status_code, 200,
+                "Default expected status code"
+            ); // As per default_expected_status_code()
+            assert_eq!(
+                http_check.body_regex_check, None,
+                "Default body regex check"
+            );
         } else {
             panic!("Expected Http check for default.example.com");
         }
@@ -490,9 +513,18 @@ pub enum HttpMethod {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum AuthConfig {
-    Basic { username: String, password: String },
-    OAuth2 { client_id: String, client_secret: String, token_url: String },
-    Bearer { token: String },
+    Basic {
+        username: String,
+        password: String,
+    },
+    OAuth2 {
+        client_id: String,
+        client_secret: String,
+        token_url: String,
+    },
+    Bearer {
+        token: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
