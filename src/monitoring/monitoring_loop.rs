@@ -1,11 +1,6 @@
 use crate::config::{AppConfig, Check, HttpProtocol};
-use crate::monitoring::checks::{
-    check_elasticsearch, check_http_target, check_kafka, check_mongodb, check_mysql,
-    check_postgres, check_rabbitmq, check_redis, check_tcp_port,
-};
-use crate::monitoring::types::{
-    CheckResult, CheckStatus, HttpCheckResultDetails, TargetStatus,
-};
+use crate::monitoring::checks::{check_elasticsearch, check_http_target, check_tcp_port};
+use crate::monitoring::types::{CheckResult, CheckStatus, HttpCheckResultDetails, TargetStatus};
 use log::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
@@ -290,199 +285,244 @@ pub async fn run_monitoring_loop(
                             }
                         }
                         Check::Postgres(postgres_config) => {
-                            let check_type_str = "PostgreSQL";
-                            info!(
-                                "Performing {} check for target: {} ({}:{})",
-                                check_type_str,
-                                alias_clone,
-                                host_address_clone,
-                                postgres_config.port
-                            );
-                            let service_result =
-                                check_postgres(&host_address_clone, postgres_config).await;
-                            let is_healthy_now =
-                                matches!(service_result.status, CheckStatus::Healthy);
-
-                            if is_healthy_now {
+                            #[cfg(feature = "postgres")]
+                            {
+                                let check_type_str = "PostgreSQL";
                                 info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (PostgreSQL)",
+                                    "Performing {} check for target: {} ({}:{})",
+                                    check_type_str,
                                     alias_clone,
                                     host_address_clone,
-                                    service_result.response_time_ms
+                                    postgres_config.port
                                 );
-                            }
+                                let service_result = crate::monitoring::checks::check_postgres(
+                                    &host_address_clone,
+                                    postgres_config,
+                                )
+                                .await;
+                                let is_healthy_now =
+                                    matches!(service_result.status, CheckStatus::Healthy);
 
-                            current_check_result = CheckResult::Postgres(service_result);
-                            update_service_status(
-                                &shared_statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                current_check_result.clone(),
-                                is_healthy_now,
-                                check_type_str,
-                            )
-                            .await;
+                                if is_healthy_now {
+                                    info!(
+                                        "Target {} ({}) is healthy. Response time: {}ms (PostgreSQL)",
+                                        alias_clone,
+                                        host_address_clone,
+                                        service_result.response_time_ms
+                                    );
+                                }
+
+                                current_check_result = CheckResult::Postgres(service_result);
+                                update_service_status(
+                                    &shared_statuses_clone,
+                                    status_index,
+                                    &alias_clone,
+                                    current_check_result.clone(),
+                                    is_healthy_now,
+                                    check_type_str,
+                                )
+                                .await;
+                            }
                         }
                         Check::Redis(redis_config) => {
-                            let check_type_str = "Redis";
-                            info!(
-                                "Performing {} check for target: {} ({}:{})",
-                                check_type_str, alias_clone, host_address_clone, redis_config.port
-                            );
-                            let service_result =
-                                check_redis(&host_address_clone, redis_config).await;
-                            let is_healthy_now =
-                                matches!(service_result.status, CheckStatus::Healthy);
-
-                            if is_healthy_now {
+                            #[cfg(feature = "redis")]
+                            {
+                                let check_type_str = "Redis";
                                 info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (Redis)",
+                                    "Performing {} check for target: {} ({}:{})",
+                                    check_type_str,
                                     alias_clone,
                                     host_address_clone,
-                                    service_result.response_time_ms
+                                    redis_config.port
                                 );
-                            }
+                                let service_result = crate::monitoring::checks::check_redis(
+                                    &host_address_clone,
+                                    redis_config,
+                                )
+                                .await;
+                                let is_healthy_now =
+                                    matches!(service_result.status, CheckStatus::Healthy);
 
-                            current_check_result = CheckResult::Redis(service_result);
-                            update_service_status(
-                                &shared_statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                current_check_result.clone(),
-                                is_healthy_now,
-                                check_type_str,
-                            )
-                            .await;
+                                if is_healthy_now {
+                                    info!(
+                                        "Target {} ({}) is healthy. Response time: {}ms (Redis)",
+                                        alias_clone,
+                                        host_address_clone,
+                                        service_result.response_time_ms
+                                    );
+                                }
+
+                                current_check_result = CheckResult::Redis(service_result);
+                                update_service_status(
+                                    &shared_statuses_clone,
+                                    status_index,
+                                    &alias_clone,
+                                    current_check_result.clone(),
+                                    is_healthy_now,
+                                    check_type_str,
+                                )
+                                .await;
+                            }
                         }
                         Check::RabbitMQ(rabbitmq_config) => {
-                            let check_type_str = "RabbitMQ";
-                            info!(
-                                "Performing {} check for target: {} ({}:{})",
-                                check_type_str,
-                                alias_clone,
-                                host_address_clone,
-                                rabbitmq_config.port
-                            );
-                            let service_result =
-                                check_rabbitmq(&host_address_clone, rabbitmq_config).await;
-                            let is_healthy_now =
-                                matches!(service_result.status, CheckStatus::Healthy);
-
-                            if is_healthy_now {
+                            #[cfg(feature = "rabbitmq")]
+                            {
+                                let check_type_str = "RabbitMQ";
                                 info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (RabbitMQ)",
+                                    "Performing {} check for target: {} ({}:{})",
+                                    check_type_str,
                                     alias_clone,
                                     host_address_clone,
-                                    service_result.response_time_ms
+                                    rabbitmq_config.port
                                 );
-                            }
+                                let service_result = crate::monitoring::checks::check_rabbitmq(
+                                    &host_address_clone,
+                                    rabbitmq_config,
+                                )
+                                .await;
+                                let is_healthy_now =
+                                    matches!(service_result.status, CheckStatus::Healthy);
 
-                            current_check_result = CheckResult::RabbitMQ(service_result);
-                            update_service_status(
-                                &shared_statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                current_check_result.clone(),
-                                is_healthy_now,
-                                check_type_str,
-                            )
-                            .await;
+                                if is_healthy_now {
+                                    info!(
+                                        "Target {} ({}) is healthy. Response time: {}ms (RabbitMQ)",
+                                        alias_clone,
+                                        host_address_clone,
+                                        service_result.response_time_ms
+                                    );
+                                }
+
+                                current_check_result = CheckResult::RabbitMQ(service_result);
+                                update_service_status(
+                                    &shared_statuses_clone,
+                                    status_index,
+                                    &alias_clone,
+                                    current_check_result.clone(),
+                                    is_healthy_now,
+                                    check_type_str,
+                                )
+                                .await;
+                            }
                         }
                         Check::Kafka(kafka_config) => {
-                            let check_type_str = "Kafka";
-                            info!(
-                                "Performing {} check for target: {} ({}:{})",
-                                check_type_str, alias_clone, host_address_clone, kafka_config.port
-                            );
-                            let service_result =
-                                check_kafka(&host_address_clone, kafka_config).await;
-                            let is_healthy_now =
-                                matches!(service_result.status, CheckStatus::Healthy);
-
-                            if is_healthy_now {
+                            #[cfg(feature = "kafka")]
+                            {
+                                let check_type_str = "Kafka";
                                 info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (Kafka)",
+                                    "Performing {} check for target: {} ({}:{})",
+                                    check_type_str,
                                     alias_clone,
                                     host_address_clone,
-                                    service_result.response_time_ms
+                                    kafka_config.port
                                 );
-                            }
+                                let service_result = crate::monitoring::checks::check_kafka(
+                                    &host_address_clone,
+                                    kafka_config,
+                                )
+                                .await;
+                                let is_healthy_now =
+                                    matches!(service_result.status, CheckStatus::Healthy);
 
-                            current_check_result = CheckResult::Kafka(service_result);
-                            update_service_status(
-                                &shared_statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                current_check_result.clone(),
-                                is_healthy_now,
-                                check_type_str,
-                            )
-                            .await;
+                                if is_healthy_now {
+                                    info!(
+                                        "Target {} ({}) is healthy. Response time: {}ms (Kafka)",
+                                        alias_clone,
+                                        host_address_clone,
+                                        service_result.response_time_ms
+                                    );
+                                }
+
+                                current_check_result = CheckResult::Kafka(service_result);
+                                update_service_status(
+                                    &shared_statuses_clone,
+                                    status_index,
+                                    &alias_clone,
+                                    current_check_result.clone(),
+                                    is_healthy_now,
+                                    check_type_str,
+                                )
+                                .await;
+                            }
                         }
                         Check::MySQL(mysql_config) => {
-                            let check_type_str = "MySQL";
-                            info!(
-                                "Performing {} check for target: {} ({}:{})",
-                                check_type_str, alias_clone, host_address_clone, mysql_config.port
-                            );
-                            let service_result =
-                                check_mysql(&host_address_clone, mysql_config).await;
-                            let is_healthy_now =
-                                matches!(service_result.status, CheckStatus::Healthy);
-
-                            if is_healthy_now {
+                            #[cfg(feature = "mysql")]
+                            {
+                                let check_type_str = "MySQL";
                                 info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (MySQL)",
+                                    "Performing {} check for target: {} ({}:{})",
+                                    check_type_str,
                                     alias_clone,
                                     host_address_clone,
-                                    service_result.response_time_ms
+                                    mysql_config.port
                                 );
-                            }
+                                let service_result = crate::monitoring::checks::check_mysql(
+                                    &host_address_clone,
+                                    mysql_config,
+                                )
+                                .await;
+                                let is_healthy_now =
+                                    matches!(service_result.status, CheckStatus::Healthy);
 
-                            current_check_result = CheckResult::MySQL(service_result);
-                            update_service_status(
-                                &shared_statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                current_check_result.clone(),
-                                is_healthy_now,
-                                check_type_str,
-                            )
-                            .await;
+                                if is_healthy_now {
+                                    info!(
+                                        "Target {} ({}) is healthy. Response time: {}ms (MySQL)",
+                                        alias_clone,
+                                        host_address_clone,
+                                        service_result.response_time_ms
+                                    );
+                                }
+
+                                current_check_result = CheckResult::MySQL(service_result);
+                                update_service_status(
+                                    &shared_statuses_clone,
+                                    status_index,
+                                    &alias_clone,
+                                    current_check_result.clone(),
+                                    is_healthy_now,
+                                    check_type_str,
+                                )
+                                .await;
+                            }
                         }
                         Check::MongoDB(mongodb_config) => {
-                            let check_type_str = "MongoDB";
-                            info!(
-                                "Performing {} check for target: {} ({}:{})",
-                                check_type_str,
-                                alias_clone,
-                                host_address_clone,
-                                mongodb_config.port
-                            );
-                            let service_result =
-                                check_mongodb(&host_address_clone, mongodb_config).await;
-                            let is_healthy_now =
-                                matches!(service_result.status, CheckStatus::Healthy);
-
-                            if is_healthy_now {
+                            #[cfg(feature = "mongodb")]
+                            {
+                                let check_type_str = "MongoDB";
                                 info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (MongoDB)",
+                                    "Performing {} check for target: {} ({}:{})",
+                                    check_type_str,
                                     alias_clone,
                                     host_address_clone,
-                                    service_result.response_time_ms
+                                    mongodb_config.port
                                 );
-                            }
+                                let service_result = crate::monitoring::checks::check_mongodb(
+                                    &host_address_clone,
+                                    mongodb_config,
+                                )
+                                .await;
+                                let is_healthy_now =
+                                    matches!(service_result.status, CheckStatus::Healthy);
 
-                            current_check_result = CheckResult::MongoDB(service_result);
-                            update_service_status(
-                                &shared_statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                current_check_result.clone(),
-                                is_healthy_now,
-                                check_type_str,
-                            )
-                            .await;
+                                if is_healthy_now {
+                                    info!(
+                                        "Target {} ({}) is healthy. Response time: {}ms (MongoDB)",
+                                        alias_clone,
+                                        host_address_clone,
+                                        service_result.response_time_ms
+                                    );
+                                }
+
+                                current_check_result = CheckResult::MongoDB(service_result);
+                                update_service_status(
+                                    &shared_statuses_clone,
+                                    status_index,
+                                    &alias_clone,
+                                    current_check_result.clone(),
+                                    is_healthy_now,
+                                    check_type_str,
+                                )
+                                .await;
+                            }
                         }
                         Check::Elasticsearch(es_config) => {
                             let check_type_str = "Elasticsearch";

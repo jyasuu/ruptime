@@ -3,12 +3,12 @@ use crate::config::{
     RabbitMQCheck, RedisCheck,
 };
 use crate::monitoring::types::{CheckStatus, ServiceCheckResult};
-use mysql_async::prelude::*;
-use rdkafka::consumer::Consumer;
+
 use std::time::Duration;
 use tokio::time::timeout;
 
 // PostgreSQL health check
+#[cfg(feature = "postgres")]
 pub async fn check_postgres(address: &str, config: &PostgresCheck) -> ServiceCheckResult {
     let start_time = std::time::Instant::now();
 
@@ -75,6 +75,7 @@ pub async fn check_postgres(address: &str, config: &PostgresCheck) -> ServiceChe
 }
 
 // Redis health check
+#[cfg(feature = "redis")]
 pub async fn check_redis(address: &str, config: &RedisCheck) -> ServiceCheckResult {
     let start_time = std::time::Instant::now();
 
@@ -126,6 +127,7 @@ pub async fn check_redis(address: &str, config: &RedisCheck) -> ServiceCheckResu
 }
 
 // RabbitMQ health check
+#[cfg(feature = "rabbitmq")]
 pub async fn check_rabbitmq(address: &str, config: &RabbitMQCheck) -> ServiceCheckResult {
     let start_time = std::time::Instant::now();
 
@@ -214,6 +216,9 @@ pub async fn check_rabbitmq(address: &str, config: &RabbitMQCheck) -> ServiceChe
 }
 
 // Kafka health check
+#[cfg(feature = "kafka")]
+use rdkafka::consumer::Consumer;
+#[cfg(feature = "kafka")]
 pub async fn check_kafka(address: &str, config: &KafkaCheck) -> ServiceCheckResult {
     let start_time = std::time::Instant::now();
 
@@ -261,6 +266,9 @@ pub async fn check_kafka(address: &str, config: &KafkaCheck) -> ServiceCheckResu
 }
 
 // MySQL health check
+#[cfg(feature = "mysql")]
+use mysql_async::prelude::*;
+#[cfg(feature = "mysql")]
 pub async fn check_mysql(address: &str, config: &MySQLCheck) -> ServiceCheckResult {
     let start_time = std::time::Instant::now();
 
@@ -321,6 +329,7 @@ pub async fn check_mysql(address: &str, config: &MySQLCheck) -> ServiceCheckResu
 }
 
 // MongoDB health check
+#[cfg(feature = "mongodb")]
 pub async fn check_mongodb(address: &str, config: &MongoDBCheck) -> ServiceCheckResult {
     let start_time = std::time::Instant::now();
 
