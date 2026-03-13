@@ -148,6 +148,7 @@ async fn badge_handler(
 
             let response_time = match &status.last_result {
                 Some(CheckResult::Http(http_details)) => Some(http_details.response_time_ms),
+                Some(CheckResult::Tcp(tcp_details)) => Some(tcp_details.response_time_ms),
                 _ => None,
             };
 
