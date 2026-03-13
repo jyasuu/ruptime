@@ -4,7 +4,7 @@ use crate::monitoring::checks::{
     check_postgres, check_rabbitmq, check_redis, check_tcp_port,
 };
 use crate::monitoring::types::{
-    CheckResult, CheckStatus, HttpCheckResultDetails, TargetStatus, TcpCheckResult,
+    CheckResult, CheckStatus, HttpCheckResultDetails, TargetStatus,
 };
 use log::{debug, info, warn};
 use std::sync::Arc;
