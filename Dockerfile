@@ -18,10 +18,14 @@ COPY Cargo.toml Cargo.lock ./
 COPY . .
 
 # Build the project in release mode
-RUN cargo build --release
+RUN apt-get update && apt-get install -y musl-tools
+RUN rustup target add x86_64-unknown-linux-musl
+RUN cargo build --release --target=x86_64-unknown-linux-musl
+
 
 # Stage 2: Runtime
-FROM ubuntu:24.04
+FROM alpine
+
 
 # Set the locale environment variables
 ENV LANG=en_US.UTF-8
@@ -32,7 +36,7 @@ ENV LC_ALL=en_US.UTF-8
 WORKDIR /app
 
 # Copy the compiled binary from the build stage
-COPY --from=builder /usr/src/app/target/release/uptime_monitor .
+COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-musl/release/uptime_monitor .
 
 EXPOSE 8080
 
