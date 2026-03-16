@@ -408,7 +408,7 @@ pub async fn check_http_target(
 
     // 3. Perform the request
     let is_https       = http_check_config.protocol == HttpProtocol::Https;
-    let accept_invalid = is_https && !http_check_config.check_ssl_certificate;
+    let accept_invalid = is_https;
 
     let response = match do_http_request(
         address,
