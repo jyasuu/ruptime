@@ -150,22 +150,21 @@ pub async fn run_monitoring_loop(
                 // reqwest::Client is cheap to clone (it's Arc-backed) and holds the
                 // connection pool. Reusing it avoids paying TLS context construction
                 // and pool allocation cost on every single check cycle.
-                let http_client: Option<reqwest::Client> = if let Check::Http(http_check_config) =
-                    &check_clone
-                {
-                    match build_http_client(http_check_config) {
-                        Ok(c) => Some(c),
-                        Err(e) => {
-                            warn!(
+                let http_client: Option<reqwest::Client> =
+                    if let Check::Http(http_check_config) = &check_clone {
+                        match build_http_client(http_check_config) {
+                            Ok(c) => Some(c),
+                            Err(e) => {
+                                warn!(
                                 "Failed to build HTTP client for {}: {}. Will retry each cycle.",
                                 alias_clone, e
                             );
-                            None
+                                None
+                            }
                         }
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
 
                 loop {
                     let interval_seconds = app_config_clone.monitoring_interval_seconds;
