@@ -361,6 +361,15 @@ async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl
                 labels, cert_valid_value
             );
         }
+        if let Some(CheckResult::Tcp(tcp_details)) = &status.last_result {
+            // monitor_response_time
+            let _ = writeln!(
+                http_metrics_buffer,
+                "monitor_response_time{{{}}} {}",
+                labels, tcp_details.response_time_ms
+            );
+
+        }
     }
 
     // Append buffered custom metrics to the main custom output

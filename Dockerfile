@@ -24,9 +24,9 @@ RUN cargo build --release
 FROM ubuntu:24.04
 
 # Set the locale environment variables
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 # Set the working directory
 WORKDIR /app

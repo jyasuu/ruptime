@@ -2,92 +2,48 @@ use crate::config::{
     AssertionPredicate, AssertionQuery, AssertionValue, CertificateField, HttpAssertion,
 };
 use crate::monitoring::types::AssertionResult;
+use http::{HeaderMap, StatusCode};
 use jsonpath_lib as jsonpath;
 use regex::Regex;
-
-// Function to evaluate HTTP response assertions
-pub fn evaluate_assertions(
-    assertions: &[HttpAssertion],
-    response: &reqwest::Response,
-    response_body: &str,
-    response_time_ms: u128,
-    cert_info: Option<&openssl::x509::X509>,
-) -> Vec<AssertionResult> {
-    let mut results = Vec::new();
-
-    for assertion in assertions {
-        let result = evaluate_single_assertion(
-            assertion,
-            response,
-            response_body,
-            response_time_ms,
-            cert_info,
-        );
-        results.push(result);
-    }
-
-    results
-}
 
 // Function to evaluate HTTP response assertions with separate data
 pub fn evaluate_assertions_with_data(
     assertions: &[HttpAssertion],
-    response_status: reqwest::StatusCode,
-    response_headers: &reqwest::header::HeaderMap,
+    response_status: StatusCode,
+    response_headers: &HeaderMap,
     response_body: &str,
     response_time_ms: u128,
-    cert_info: Option<&openssl::x509::X509>,
+    _cert_info: Option<()>, // placeholder — cert assertions return None
 ) -> Vec<AssertionResult> {
-    let mut results = Vec::new();
-
-    for assertion in assertions {
-        let result = evaluate_single_assertion_with_data(
-            assertion,
-            response_status,
-            response_headers,
-            response_body,
-            response_time_ms,
-            cert_info,
-        );
-        results.push(result);
-    }
-
-    results
-}
-
-fn evaluate_single_assertion(
-    assertion: &HttpAssertion,
-    response: &reqwest::Response,
-    response_body: &str,
-    response_time_ms: u128,
-    cert_info: Option<&openssl::x509::X509>,
-) -> AssertionResult {
-    evaluate_single_assertion_with_data(
-        assertion,
-        response.status(),
-        response.headers(),
-        response_body,
-        response_time_ms,
-        cert_info,
-    )
+    assertions
+        .iter()
+        .map(|assertion| {
+            evaluate_single_assertion_with_data(
+                assertion,
+                response_status,
+                response_headers,
+                response_body,
+                response_time_ms,
+            )
+        })
+        .collect()
 }
 
 fn evaluate_single_assertion_with_data(
     assertion: &HttpAssertion,
-    response_status: reqwest::StatusCode,
-    response_headers: &reqwest::header::HeaderMap,
+    response_status: StatusCode,
+    response_headers: &HeaderMap,
     response_body: &str,
     response_time_ms: u128,
-    cert_info: Option<&openssl::x509::X509>,
 ) -> AssertionResult {
     let query_result = match &assertion.query {
         AssertionQuery::Status => Some(serde_json::Value::Number(serde_json::Number::from(
             response_status.as_u16(),
         ))),
         AssertionQuery::Header { name } => response_headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| serde_json::Value::String(s.to_string())),
+            .get(name.as_str())
+            .and_then(|v: &http::HeaderValue| v.to_str().ok())
+            .map(|s: &str| serde_json::Value::String(s.to_string())),
         AssertionQuery::Body => Some(serde_json::Value::String(response_body.to_string())),
         AssertionQuery::JsonPath { path } => {
             match serde_json::from_str::<serde_json::Value>(response_body) {
@@ -109,71 +65,28 @@ fn evaluate_single_assertion_with_data(
             }
         }
         AssertionQuery::Regex { pattern } => match Regex::new(pattern) {
-            Ok(re) => {
-                if let Some(captures) = re.captures(response_body) {
-                    if let Some(matched) = captures.get(0) {
-                        Some(serde_json::Value::String(matched.as_str().to_string()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
+            Ok(re) => re
+                .captures(response_body)
+                .and_then(|c| c.get(0))
+                .map(|m| serde_json::Value::String(m.as_str().to_string())),
             Err(_) => None,
         },
-        AssertionQuery::Cookie { name } => {
-            // Extract cookie from response headers
-            response_headers
-                .get("set-cookie")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|cookies| {
-                    cookies
-                        .split(';')
-                        .find(|cookie| cookie.trim().starts_with(&format!("{}=", name)))
-                        .and_then(|cookie| cookie.split('=').nth(1))
-                        .map(|value| serde_json::Value::String(value.trim().to_string()))
-                })
-        }
+        AssertionQuery::Cookie { name } => response_headers
+            .get("set-cookie")
+            .and_then(|v: &http::HeaderValue| v.to_str().ok())
+            .and_then(|cookies: &str| {
+                cookies
+                    .split(';')
+                    .find(|cookie: &&str| cookie.trim().starts_with(&format!("{}=", name)))
+                    .and_then(|cookie: &str| cookie.split('=').nth(1))
+                    .map(|value: &str| serde_json::Value::String(value.trim().to_string()))
+            }),
         AssertionQuery::Duration => Some(serde_json::Value::Number(serde_json::Number::from(
             response_time_ms as u64,
         ))),
-        AssertionQuery::Certificate { field } => {
-            cert_info.and_then(|cert| {
-                match field {
-                    CertificateField::Subject => {
-                        // Use a safe string representation for X509Name
-                        Some(serde_json::Value::String(format!(
-                            "{:?}",
-                            cert.subject_name()
-                        )))
-                    }
-                    CertificateField::Issuer => Some(serde_json::Value::String(format!(
-                        "{:?}",
-                        cert.issuer_name()
-                    ))),
-                    CertificateField::Serial => cert
-                        .serial_number()
-                        .to_bn()
-                        .ok()
-                        .map(|bn| serde_json::Value::String(bn.to_string())),
-                    CertificateField::NotBefore => {
-                        Some(serde_json::Value::String(format!("{}", cert.not_before())))
-                    }
-                    CertificateField::NotAfter => {
-                        Some(serde_json::Value::String(format!("{}", cert.not_after())))
-                    }
-                    CertificateField::Algorithm => Some(serde_json::Value::String(format!(
-                        "{:?}",
-                        cert.signature_algorithm().object()
-                    ))),
-                }
-            })
-        }
-        AssertionQuery::XPath { path: _ } => {
-            // XPath is not implemented in the current version
-            None
-        }
+        // Certificate assertions require openssl X509 data; not available in the raw-TCP path.
+        AssertionQuery::Certificate { field: _ } => None,
+        AssertionQuery::XPath { path: _ } => None,
     };
 
     let query_str = format_query(&assertion.query);
@@ -202,7 +115,6 @@ fn evaluate_single_assertion_with_data(
             }
         }
         None => {
-            // Query returned no value
             let passed = matches!(assertion.predicate, AssertionPredicate::NotExists);
             let expected_str = format_assertion_value(&assertion.value);
 
@@ -244,8 +156,8 @@ fn evaluate_predicate(
         }
         AssertionPredicate::Matches => regex_predicate(actual, expected),
         AssertionPredicate::NotMatches => !regex_predicate(actual, expected),
-        AssertionPredicate::Exists => true, // If we got here, value exists
-        AssertionPredicate::NotExists => false, // If we got here, value exists
+        AssertionPredicate::Exists => true,
+        AssertionPredicate::NotExists => false,
         AssertionPredicate::IsBoolean => actual.is_boolean(),
         AssertionPredicate::IsNumber => actual.is_number(),
         AssertionPredicate::IsInteger => actual.is_i64() || actual.is_u64(),
@@ -265,7 +177,6 @@ fn evaluate_predicate(
     }
 }
 
-// Helper functions for assertion evaluation
 pub fn values_equal(actual: &serde_json::Value, expected: &AssertionValue) -> bool {
     match (actual, expected) {
         (serde_json::Value::String(a), AssertionValue::String(e)) => a == e,
@@ -283,18 +194,10 @@ where
 {
     match (actual, expected) {
         (serde_json::Value::Number(a), AssertionValue::Number(e)) => {
-            if let Some(a_val) = a.as_f64() {
-                op(a_val, *e)
-            } else {
-                false
-            }
+            a.as_f64().map(|v| op(v, *e)).unwrap_or(false)
         }
         (serde_json::Value::Number(a), AssertionValue::Integer(e)) => {
-            if let Some(a_val) = a.as_f64() {
-                op(a_val, *e as f64)
-            } else {
-                false
-            }
+            a.as_f64().map(|v| op(v, *e as f64)).unwrap_or(false)
         }
         _ => false,
     }
@@ -314,11 +217,9 @@ pub fn regex_predicate(actual: &serde_json::Value, expected: &AssertionValue) ->
     if let (serde_json::Value::String(actual_str), AssertionValue::String(pattern)) =
         (actual, expected)
     {
-        if let Ok(re) = Regex::new(pattern) {
-            re.is_match(actual_str)
-        } else {
-            false
-        }
+        Regex::new(pattern)
+            .map(|re| re.is_match(actual_str))
+            .unwrap_or(false)
     } else {
         false
     }
