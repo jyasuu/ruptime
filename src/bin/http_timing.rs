@@ -358,7 +358,7 @@ fn measure_inner(
         if let Some(loc) = response_str
             .lines()
             .find(|l| l.to_lowercase().starts_with("location:"))
-            .and_then(|l| l.splitn(2, ':').nth(1))
+            .and_then(|l| l.split_once(':').map(|x| x.1))
             .map(|s| s.trim().to_string())
         {
             let new_url = if loc.starts_with("http") {

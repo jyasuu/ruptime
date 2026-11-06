@@ -1,9 +1,7 @@
-use reqwest;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use uptime_monitor::config::*;
 use uptime_monitor::monitoring::evaluate_predicate;
-use uptime_monitor::test_utils::*;
 
 /// Test helper to create HTTPS httpbin check
 fn create_httpbin_https_check(path: &str, method: HttpMethod, expected_status: u16) -> HttpCheck {
@@ -23,6 +21,7 @@ fn create_httpbin_https_check(path: &str, method: HttpMethod, expected_status: u
             predicate: AssertionPredicate::Equals,
             value: AssertionValue::Integer(expected_status as i64),
         }]),
+        ..Default::default()
     }
 }
 
@@ -623,6 +622,10 @@ async fn test_httpbin_monitoring_configuration_real() {
                     HttpMethod::Get,
                     200,
                 ))],
+                group: None,
+                tags: vec![],
+                check_domain_expiry: false,
+                domain_name: None,
             },
             HostConfig {
                 address: "httpbin.org".to_string(),
@@ -632,8 +635,14 @@ async fn test_httpbin_monitoring_configuration_real() {
                     HttpMethod::Get,
                     200,
                 ))],
+                group: None,
+                tags: vec![],
+                check_domain_expiry: false,
+                domain_name: None,
             },
         ],
+        default_language: None,
+        domain_expiry_check_interval_hours: 12,
     };
 
     assert_eq!(config.hosts.len(), 2);

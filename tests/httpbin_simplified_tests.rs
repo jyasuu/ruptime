@@ -22,6 +22,7 @@ fn create_httpbin_https_check(path: &str, method: HttpMethod, expected_status: u
             predicate: AssertionPredicate::Equals,
             value: AssertionValue::Integer(expected_status as i64),
         }]),
+        ..Default::default()
     }
 }
 
@@ -43,6 +44,7 @@ fn create_httpbin_http_check(path: &str, method: HttpMethod, expected_status: u1
             predicate: AssertionPredicate::Equals,
             value: AssertionValue::Integer(expected_status as i64),
         }]),
+        ..Default::default()
     }
 }
 
@@ -805,6 +807,10 @@ fn test_httpbin_monitoring_configuration() {
                     HttpMethod::Get,
                     200,
                 ))],
+                group: None,
+                tags: vec![],
+                check_domain_expiry: false,
+                domain_name: None,
             },
             HostConfig {
                 address: "httpbin.org".to_string(),
@@ -814,6 +820,10 @@ fn test_httpbin_monitoring_configuration() {
                     HttpMethod::Get,
                     200,
                 ))],
+                group: None,
+                tags: vec![],
+                check_domain_expiry: false,
+                domain_name: None,
             },
             HostConfig {
                 address: "httpbin.org".to_string(),
@@ -827,8 +837,14 @@ fn test_httpbin_monitoring_configuration() {
                     });
                     check
                 })],
+                group: None,
+                tags: vec![],
+                check_domain_expiry: false,
+                domain_name: None,
             },
         ],
+        default_language: None,
+        domain_expiry_check_interval_hours: 12,
     };
 
     assert_eq!(config.hosts.len(), 3);
@@ -870,7 +886,7 @@ fn test_httpbin_ssl_certificate_configuration() {
     check.check_ssl_certificate = true;
 
     assert_eq!(check.protocol, HttpProtocol::Https);
-    assert_eq!(check.check_ssl_certificate, true);
+    assert!(check.check_ssl_certificate);
     assert_eq!(check.port, 443);
 }
 

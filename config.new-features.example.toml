@@ -1,0 +1,97 @@
+# Example showing the options added in this change set.
+monitoring_interval_seconds = 30
+default_language = "zh-TW"                 # en, zh-TW, zh-CN, ja, ko, es, de, fr
+domain_expiry_check_interval_hours = 12
+
+[[hosts]]
+address = "www.example.com"
+alias = "Website"
+group = "public-web"                       # group status = all members UP
+tags = ["prod", "customer-facing"]         # filter via /api/monitors?tag=prod
+check_domain_expiry = true                 # RDAP lookup → monitor_domain_days_remaining
+# domain_name = "example.com"              # override the auto-detected registrable domain
+
+[[hosts.checks]]
+type = "Http"
+name = "homepage"
+port = 443
+path = "/"
+protocol = "Https"
+method = "Get"
+keyword = "Welcome"                        # body must contain this …
+invert_keyword = false                     # … or must NOT contain it when true
+keyword_case_sensitive = true
+accepted_status_codes = ["200-299", "301"] # replaces expected_status_code when set
+follow_redirects = true
+max_redirects = 10
+# ignore_tls_errors = true                 # TLS verification is ON by default
+# proxy = { url = "http://proxy:3128", username = "u", password = "p" }   # or socks5://…
+# ca_cert_path = "/etc/ssl/internal-ca.pem"
+# client_identity_path = "/etc/ssl/client.pem"   # cert + key in one PEM (mutual TLS)
+# upside_down = true                       # DOWN when the check passes
+# body = '{"ping":true}'                   # request body for POST/PUT
+
+[[hosts.checks]]
+type = "Ping"                              # needs `ping` binary + ICMP permission
+name = "web-ping"
+count = 2
+
+[[hosts.checks]]
+type = "Dns"
+name = "dns-mx"
+query = "example.com"
+record_type = "MX"                         # A AAAA CNAME MX NS TXT SRV CAA PTR
+resolver = "1.1.1.1"                       # omit to use the system resolver
+expected = "mail.example.com"
+
+[[hosts.checks]]
+type = "Push"                              # job calls GET|POST /api/push/<token>?status=up&msg=OK&ping=12
+name = "nightly-backup"
+token = "replace-with-a-long-random-string"
+max_silence_seconds = 90000
+
+[[hosts.checks]]
+type = "WebSocket"
+name = "live-feed"
+port = 443
+path = "/ws"
+use_tls = true
+expect_message = "hello"
+
+[[hosts.checks]]
+type = "Smtp"
+name = "mail-banner"
+port = 25
+expect_banner = "ESMTP"
+
+[[hosts.checks]]
+type = "Ntp"
+name = "time-sync"
+max_offset_ms = 500
+
+[[hosts.checks]]
+type = "Mqtt"
+name = "broker"
+port = 1883
+username = "monitor"
+password = "secret"
+
+[[hosts.checks]]
+type = "Grpc"                              # standard grpc.health.v1.Health/Check
+name = "orders-grpc"
+port = 50051
+use_tls = false                            # false = HTTP/2 cleartext (h2c); true = TLS + ALPN h2
+service = ""                               # empty = overall server health
+
+[[hosts.checks]]
+type = "Snmp"                              # SNMP v2c GET (default OID: sysUpTime.0)
+name = "switch-uptime"
+community = "public"
+oid = "1.3.6.1.2.1.1.3.0"
+# expected = "router"
+
+[[hosts.checks]]
+type = "Docker"                            # host address is ignored for this check
+name = "web-container"
+container = "web"
+endpoint = "/var/run/docker.sock"          # or "tcp://host:2375"

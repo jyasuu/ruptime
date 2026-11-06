@@ -11,6 +11,16 @@ pub struct AppConfig {
     pub memory_cleanup_interval_minutes: u64,
     #[serde(default = "default_keep_history_hours")]
     pub keep_history_hours: u64,
+    /// Default UI language for badges / API text (e.g. "en", "zh-TW", "ja").
+    #[serde(default)]
+    pub default_language: Option<String>,
+    /// How often registered-domain expiry (RDAP) is refreshed.
+    #[serde(default = "default_domain_expiry_interval_hours")]
+    pub domain_expiry_check_interval_hours: u64,
+}
+
+fn default_domain_expiry_interval_hours() -> u64 {
+    12
 }
 
 use log::error; // Added log macro
@@ -248,7 +258,7 @@ address = "default.tcp.example.com"
         assert_eq!(http_host.alias, None, "Default alias");
         if let Check::Http(http_check) = &http_host.checks[0] {
             assert_eq!(http_check.timeout_seconds, 10, "Default HTTP timeout"); // As per default_http_timeout()
-            assert_eq!(http_check.check_ssl_certificate, true, "Default SSL check"); // As per default_check_ssl_certificate()
+            assert!(http_check.check_ssl_certificate, "Default SSL check"); // As per default_check_ssl_certificate()
             assert_eq!(
                 http_check.expected_status_code, 200,
                 "Default expected status code"
@@ -276,6 +286,20 @@ pub struct HostConfig {
     pub address: String,
     pub alias: Option<String>,
     pub checks: Vec<Check>,
+    /// Logical group (Uptime Kuma "group" monitor). Group status is the
+    /// aggregate of all checks that share this name.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Free-form tags, exposed in `/api/monitors` and `monitor_info` metrics.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Look up registered-domain expiry via RDAP for this host.
+    #[serde(default)]
+    pub check_domain_expiry: bool,
+    /// Override the registrable domain used for the RDAP lookup
+    /// (default: derived from `address` using the public-suffix list).
+    #[serde(default)]
+    pub domain_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -290,6 +314,214 @@ pub enum Check {
     MySQL(MySQLCheck),
     MongoDB(MongoDBCheck),
     Elasticsearch(ElasticsearchCheck),
+    Ping(PingCheck),
+    Dns(DnsCheck),
+    Push(PushCheck),
+    WebSocket(WebSocketCheck),
+    Smtp(SmtpCheck),
+    Ntp(NtpCheck),
+    Mqtt(MqttCheck),
+    Grpc(GrpcCheck),
+    Snmp(SnmpCheck),
+    Docker(DockerCheck),
+}
+
+// ─── Additional protocol checks ───────────────────────────────────────────────
+
+/// ICMP ping (uses the system `ping` binary, like Uptime Kuma).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PingCheck {
+    pub name: Option<String>,
+    #[serde(default = "default_ping_count")]
+    pub count: u32,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_ping_count() -> u32 {
+    1
+}
+fn default_ping_timeout() -> u64 {
+    5
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum DnsRecordType {
+    A,
+    AAAA,
+    CNAME,
+    MX,
+    NS,
+    TXT,
+    SRV,
+    CAA,
+    PTR,
+}
+
+/// DNS record resolution, optionally against a specific resolver.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsCheck {
+    pub name: Option<String>,
+    /// Name to resolve (for PTR: the IP address).
+    pub query: String,
+    pub record_type: DnsRecordType,
+    /// Resolver IP; when absent the system resolver is used.
+    #[serde(default)]
+    pub resolver: Option<String>,
+    #[serde(default = "default_dns_port")]
+    pub port: u16,
+    /// If set, at least one returned record must contain this text.
+    #[serde(default)]
+    pub expected: Option<String>,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_dns_port() -> u16 {
+    53
+}
+
+/// Passive monitor: the monitored job calls `GET|POST /api/push/{token}`.
+/// The target is DOWN when no push arrived within `max_silence_seconds`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PushCheck {
+    pub name: Option<String>,
+    pub token: String,
+    /// Defaults to 2x the global monitoring interval.
+    #[serde(default)]
+    pub max_silence_seconds: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WebSocketCheck {
+    pub name: Option<String>,
+    pub port: u16,
+    #[serde(default = "default_ws_path")]
+    pub path: String,
+    #[serde(default)]
+    pub use_tls: bool,
+    #[serde(default)]
+    pub ignore_tls_errors: bool,
+    #[serde(default)]
+    pub subprotocol: Option<String>,
+    /// Optional text frame to send after the handshake.
+    #[serde(default)]
+    pub send_message: Option<String>,
+    /// If set, a text frame containing this value must be received.
+    #[serde(default)]
+    pub expect_message: Option<String>,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_ws_path() -> String {
+    "/".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SmtpCheck {
+    pub name: Option<String>,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    /// If set, the 220 banner must contain this text.
+    #[serde(default)]
+    pub expect_banner: Option<String>,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_smtp_port() -> u16 {
+    25
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NtpCheck {
+    pub name: Option<String>,
+    #[serde(default = "default_ntp_port")]
+    pub port: u16,
+    /// Fail when |local clock - server clock| exceeds this many milliseconds.
+    #[serde(default)]
+    pub max_offset_ms: Option<u64>,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_ntp_port() -> u16 {
+    123
+}
+
+/// SNMP v2c GET of a single OID.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SnmpCheck {
+    pub name: Option<String>,
+    #[serde(default = "default_snmp_port")]
+    pub port: u16,
+    #[serde(default = "default_snmp_community")]
+    pub community: String,
+    /// Dotted OID; default is sysUpTime.0.
+    #[serde(default = "default_snmp_oid")]
+    pub oid: String,
+    /// If set, the returned value (rendered as text) must contain this.
+    #[serde(default)]
+    pub expected: Option<String>,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_snmp_port() -> u16 {
+    161
+}
+fn default_snmp_community() -> String {
+    "public".to_string()
+}
+fn default_snmp_oid() -> String {
+    "1.3.6.1.2.1.1.3.0".to_string()
+}
+
+/// Docker container state via the Engine API (the host `address` is not used).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DockerCheck {
+    pub name: Option<String>,
+    /// Container name or id.
+    pub container: String,
+    /// Unix socket path or `tcp://host:port`.
+    #[serde(default = "default_docker_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_docker_endpoint() -> String {
+    "/var/run/docker.sock".to_string()
+}
+
+/// gRPC health check (`grpc.health.v1.Health/Check`).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GrpcCheck {
+    pub name: Option<String>,
+    pub port: u16,
+    /// Use TLS (h2 via ALPN). Without it, HTTP/2 cleartext (h2c) is used.
+    #[serde(default)]
+    pub use_tls: bool,
+    #[serde(default)]
+    pub ignore_tls_errors: bool,
+    /// Service name passed to the health RPC; empty = overall server health.
+    #[serde(default)]
+    pub service: String,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+
+/// MQTT 3.1.1 broker check (CONNECT / CONNACK).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MqttCheck {
+    pub name: Option<String>,
+    #[serde(default = "default_mqtt_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default = "default_ping_timeout")]
+    pub timeout_seconds: u64,
+}
+fn default_mqtt_port() -> u16 {
+    1883
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -481,6 +713,96 @@ pub struct HttpCheck {
     pub auth: Option<AuthConfig>, // Authentication configuration
     pub headers: Option<std::collections::HashMap<String, String>>, // Custom headers
     pub assertions: Option<Vec<HttpAssertion>>, // HTTP response assertions
+
+    // ── Extended HTTP options ────────────────────────────────────────────────
+    /// Request body for POST/PUT/etc.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Response body must contain this keyword (Uptime Kuma "HTTP(s) - Keyword").
+    #[serde(default)]
+    pub keyword: Option<String>,
+    /// Invert the keyword check: body must NOT contain the keyword.
+    #[serde(default)]
+    pub invert_keyword: bool,
+    #[serde(default = "default_true")]
+    pub keyword_case_sensitive: bool,
+    /// Accepted status codes / ranges, e.g. ["200-299", "301"].
+    /// When non-empty this replaces `expected_status_code`.
+    #[serde(default)]
+    pub accepted_status_codes: Vec<String>,
+    #[serde(default = "default_true")]
+    pub follow_redirects: bool,
+    #[serde(default = "default_max_redirects")]
+    pub max_redirects: usize,
+    /// Skip TLS certificate verification (self-signed certs).
+    #[serde(default)]
+    pub ignore_tls_errors: bool,
+    /// HTTP/HTTPS/SOCKS5 proxy.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
+    /// Extra CA bundle (PEM) to trust.
+    #[serde(default)]
+    pub ca_cert_path: Option<String>,
+    /// Client certificate + private key in one PEM file (mutual TLS).
+    #[serde(default)]
+    pub client_identity_path: Option<String>,
+    /// Flip the result: DOWN when the check passes, UP when it fails.
+    #[serde(default)]
+    pub upside_down: bool,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+}
+
+impl Default for HttpCheck {
+    /// Mirrors the serde defaults, so `..Default::default()` behaves exactly
+    /// like omitting the fields in the TOML file.
+    fn default() -> Self {
+        HttpCheck {
+            name: None,
+            port: 80,
+            path: "/".to_string(),
+            protocol: HttpProtocol::default(),
+            method: HttpMethod::default(),
+            timeout_seconds: default_http_timeout(),
+            check_ssl_certificate: default_check_ssl_certificate(),
+            expected_status_code: default_expected_status_code(),
+            body_regex_check: None,
+            auth: None,
+            headers: None,
+            assertions: None,
+            body: None,
+            keyword: None,
+            invert_keyword: false,
+            keyword_case_sensitive: true,
+            accepted_status_codes: Vec::new(),
+            follow_redirects: true,
+            max_redirects: default_max_redirects(),
+            ignore_tls_errors: false,
+            proxy: None,
+            ca_cert_path: None,
+            client_identity_path: None,
+            upside_down: false,
+            user_agent: None,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_redirects() -> usize {
+    10
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProxyConfig {
+    /// e.g. `http://proxy:3128` or `socks5://127.0.0.1:1080`
+    pub url: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 fn default_http_timeout() -> u64 {
@@ -495,14 +817,16 @@ fn default_expected_status_code() -> u16 {
     200
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub enum HttpProtocol {
+    #[default]
     Http,
     Https,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub enum HttpMethod {
+    #[default]
     Get,
     Post,
     Head,

@@ -15,6 +15,57 @@ pub enum CheckResult {
     MySQL(ServiceCheckResult),
     MongoDB(ServiceCheckResult),
     Elasticsearch(ServiceCheckResult),
+    /// Ping / DNS / Push / WebSocket / SMTP / NTP / MQTT.
+    Protocol(ProtocolKind, ServiceCheckResult),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ProtocolKind {
+    Ping,
+    Dns,
+    Push,
+    WebSocket,
+    Smtp,
+    Ntp,
+    Mqtt,
+    Grpc,
+    Snmp,
+    Docker,
+}
+
+impl ProtocolKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProtocolKind::Ping => "ping",
+            ProtocolKind::Dns => "dns",
+            ProtocolKind::Push => "push",
+            ProtocolKind::WebSocket => "websocket",
+            ProtocolKind::Smtp => "smtp",
+            ProtocolKind::Ntp => "ntp",
+            ProtocolKind::Mqtt => "mqtt",
+            ProtocolKind::Grpc => "grpc",
+            ProtocolKind::Snmp => "snmp",
+            ProtocolKind::Docker => "docker",
+        }
+    }
+}
+
+impl CheckResult {
+    /// Metric / API label for the check type.
+    pub fn type_label(&self) -> &'static str {
+        match self {
+            CheckResult::Tcp(_) => "tcp",
+            CheckResult::Http(_) => "http",
+            CheckResult::Postgres(_) => "postgres",
+            CheckResult::Redis(_) => "redis",
+            CheckResult::RabbitMQ(_) => "rabbitmq",
+            CheckResult::Kafka(_) => "kafka",
+            CheckResult::MySQL(_) => "mysql",
+            CheckResult::MongoDB(_) => "mongodb",
+            CheckResult::Elasticsearch(_) => "elasticsearch",
+            CheckResult::Protocol(k, _) => k.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -61,6 +112,12 @@ pub struct TargetStatus {
     pub cert_days_remaining: Option<i64>,
     pub cert_is_valid: Option<bool>,
     pub check_history: Vec<HistoricalCheckResult>,
+    /// Group this monitor belongs to (host-level `group`).
+    pub group: Option<String>,
+    /// Tags (host-level `tags`).
+    pub tags: Vec<String>,
+    /// Days until the registered domain expires (RDAP), if looked up.
+    pub domain_expiry_days: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,6 +196,9 @@ impl TargetStatus {
             cert_days_remaining: None,
             cert_is_valid: None,
             check_history: Vec::new(),
+            group: None,
+            tags: Vec::new(),
+            domain_expiry_days: None,
         }
     }
 
@@ -216,5 +276,21 @@ impl TargetStatus {
             let sum: u128 = response_times.iter().sum();
             self.average_response_time_24h_ms = sum as f64 / response_times.len() as f64;
         }
+    }
+}
+
+#[cfg(test)]
+mod failure_count_tests {
+    use super::*;
+
+    #[test]
+    fn consecutive_failures_count_each_failed_check_once() {
+        let mut t = TargetStatus::new("t".into(), "http://t".into(), "t".into(), 80);
+        t.add_check_result(false, None, Some("boom".into()));
+        assert_eq!(t.consecutive_failures, 1);
+        t.add_check_result(false, None, Some("boom".into()));
+        assert_eq!(t.consecutive_failures, 2);
+        t.add_check_result(true, Some(5), None);
+        assert_eq!(t.consecutive_failures, 0);
     }
 }

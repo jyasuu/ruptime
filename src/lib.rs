@@ -1,6 +1,7 @@
 // Re-export modules for testing
 pub mod api;
 pub mod config;
+pub mod i18n;
 pub mod monitoring;
 
 // Application runner function for main and tests
@@ -41,6 +42,7 @@ pub async fn run_app() -> std::io::Result<()> {
         }
     };
 
+    i18n::set_default(loaded_config.default_language.as_deref());
     let app_config = Arc::new(loaded_config);
     let shared_target_statuses: Arc<tokio::sync::Mutex<Vec<TargetStatus>>> =
         Arc::new(Mutex::new(Vec::new()));

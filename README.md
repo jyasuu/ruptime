@@ -619,3 +619,38 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [Prometheus](https://prometheus.io/) - Metrics collection and alerting
 - [HTTPBin](https://httpbin.org/) - HTTP testing service used in our test suite
 
+
+---
+
+## Protocols, HTTP options, groups/tags, i18n and domain expiry
+
+A full annotated example is in [`config.new-features.example.toml`](config.new-features.example.toml).
+
+**New check types:** `Ping` (system `ping`), `Dns` (A/AAAA/CNAME/MX/NS/TXT/SRV/CAA/PTR, optional resolver and expected value),
+`Push` (passive heartbeat via `GET|POST /api/push/{token}`), `WebSocket`, `Smtp`, `Ntp`, `Mqtt`,
+`Grpc` (standard `grpc.health.v1` health check, h2c or TLS),
+`Snmp` (v2c GET of one OID, optional expected value), `Docker` (container running + healthcheck state via the Engine API;
+mount `/var/run/docker.sock` or use `endpoint = "tcp://host:2375"`).
+
+**HTTP options:** request `body`, `keyword` / `invert_keyword`, `accepted_status_codes` (ranges), redirects
+(`follow_redirects`, `max_redirects`), `proxy` (HTTP/SOCKS5), `ca_cert_path`, `client_identity_path` (mTLS),
+`ignore_tls_errors`, `upside_down`, `user_agent`.
+
+> **Behaviour changes in the HTTP check:** it now runs on `reqwest` (rustls). TLS certificates are **verified by default**
+> (previously never verified) — set `ignore_tls_errors = true` for self-signed targets. Redirects are followed by default.
+> Chunked / compressed responses are now decoded. The OpenSSL probe still supplies `monitor_cert_days_remaining`.
+
+**Groups & tags:** set `group` and `tags` on a host. Exposed via `GET /api/monitors?tag=…&group=…` and the metrics
+`monitor_info`, `monitor_group_status`.
+
+**i18n:** badges, `/badges` and `/api/monitors` text are localised (en, zh-TW, zh-CN, ja, ko, es, de, fr) using
+`?lang=` → `Accept-Language` → `default_language`.
+
+**Domain expiry:** `check_domain_expiry = true` on a host queries RDAP and exports `monitor_domain_days_remaining`
+(and the `domain_expiry_days` field in the API). Some ccTLDs do not publish RDAP; those hosts simply report nothing.
+
+> Note: the metric names actually emitted are `monitor_*` (e.g. `monitor_status`), not the `uptime_*` names shown in older docs above.
+
+> **Metric fix:** `monitor_consecutive_failures` previously counted every failed check twice. It now counts each failed
+> check once, so existing alert thresholds on this metric effectively double in sensitivity-to-time (e.g. `>= 6` used to fire
+> after 3 failed checks, now after 6). The `Target … recovered after N failures` log line, which never fired before, now works.

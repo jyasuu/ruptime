@@ -16,8 +16,8 @@ full = ["mongodb", "mysql", "kafka", "rabbitmq", "redis", "postgres"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-reqwest = { version = "0.11.0", features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "process"] }
+reqwest = { version = "0.11.0", features = ["json", "rustls-tls", "socks", "gzip", "brotli", "deflate"] }
 base64 = "0.22"
 http = "1"
 actix-web = "4.0.0"
@@ -35,6 +35,12 @@ uuid = { version = "1.0", features = ["v4"] }
 xpath_reader = "0.5"
 urlencoding = "2.1"
 
+# Protocol coverage / domain expiry
+hickory-resolver = "0.24"
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+psl = "2"
+
 # Optional DB/service dependencies
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"], optional = true }
 redis = { version = "0.26", features = ["tokio-comp"], optional = true }
@@ -46,3 +52,6 @@ mongodb = { version = "2.8", optional = true }
 [dev-dependencies]
 tempfile = "3"
 wiremock = "0.6"
+h2 = "0.3"
+http02 = { package = "http", version = "0.2" }
+bytes = "1"

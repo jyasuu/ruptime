@@ -1,8 +1,11 @@
 use crate::config::{AppConfig, Check, HttpProtocol};
-use crate::monitoring::checks::{check_elasticsearch, check_http_target, check_tcp_port};
+use crate::monitoring::checks::{
+    check_dns, check_docker, check_elasticsearch, check_grpc, check_http_target, check_mqtt,
+    check_ntp, check_ping, check_push, check_smtp, check_snmp, check_tcp_port, check_websocket,
+};
 use crate::monitoring::types::{
-    CheckResult, CheckStatus, HttpCheckResultDetails, ServiceCheckResult, TargetStatus,
-    TcpCheckResult,
+    CheckResult, CheckStatus, HttpCheckResultDetails, ProtocolKind, ServiceCheckResult,
+    TargetStatus, TcpCheckResult,
 };
 use log::{debug, info, warn};
 use std::sync::Arc;
@@ -48,6 +51,16 @@ pub async fn run_monitoring_loop(
                 Check::MySQL(c) => c.name.as_deref(),
                 Check::MongoDB(c) => c.name.as_deref(),
                 Check::Elasticsearch(c) => c.name.as_deref(),
+                Check::Ping(c) => c.name.as_deref(),
+                Check::Dns(c) => c.name.as_deref(),
+                Check::Push(c) => c.name.as_deref(),
+                Check::WebSocket(c) => c.name.as_deref(),
+                Check::Smtp(c) => c.name.as_deref(),
+                Check::Ntp(c) => c.name.as_deref(),
+                Check::Mqtt(c) => c.name.as_deref(),
+                Check::Grpc(c) => c.name.as_deref(),
+                Check::Snmp(c) => c.name.as_deref(),
+                Check::Docker(c) => c.name.as_deref(),
             };
 
             let target_alias = if let Some(name) = check_name {
@@ -63,6 +76,16 @@ pub async fn run_monitoring_loop(
                     Check::MySQL(c) => format!("MySQL:{}", c.port),
                     Check::MongoDB(c) => format!("MongoDB:{}", c.port),
                     Check::Elasticsearch(c) => format!("Elasticsearch:{}", c.port),
+                    Check::Ping(_) => "Ping".to_string(),
+                    Check::Dns(c) => format!("DNS:{}", c.query),
+                    Check::Push(_) => "Push".to_string(), // never expose the token
+                    Check::WebSocket(c) => format!("WebSocket:{}", c.port),
+                    Check::Smtp(c) => format!("SMTP:{}", c.port),
+                    Check::Ntp(c) => format!("NTP:{}", c.port),
+                    Check::Mqtt(c) => format!("MQTT:{}", c.port),
+                    Check::Grpc(c) => format!("gRPC:{}", c.port),
+                    Check::Snmp(c) => format!("SNMP:{}", c.port),
+                    Check::Docker(c) => format!("Docker:{}", c.container),
                 };
                 format!("{} ({})", host_alias, check_type_port)
             };
@@ -124,6 +147,44 @@ pub async fn run_monitoring_loop(
                     ),
                     c.port,
                 ),
+                Check::Ping(_) => (format!("ping://{}", host_config.address), 0),
+                Check::Dns(c) => (
+                    format!(
+                        "dns://{}/{}?type={:?}",
+                        c.resolver.as_deref().unwrap_or("system"),
+                        c.query,
+                        c.record_type
+                    ),
+                    c.port,
+                ),
+                Check::Push(_) => (format!("push://{}", host_config.address), 0),
+                Check::WebSocket(c) => (
+                    format!(
+                        "{}://{}:{}{}",
+                        if c.use_tls { "wss" } else { "ws" },
+                        host_config.address,
+                        c.port,
+                        c.path
+                    ),
+                    c.port,
+                ),
+                Check::Smtp(c) => (format!("smtp://{}:{}", host_config.address, c.port), c.port),
+                Check::Ntp(c) => (format!("ntp://{}:{}", host_config.address, c.port), c.port),
+                Check::Mqtt(c) => (format!("mqtt://{}:{}", host_config.address, c.port), c.port),
+                Check::Snmp(c) => (
+                    format!("snmp://{}:{}/{}", host_config.address, c.port, c.oid),
+                    c.port,
+                ),
+                Check::Docker(c) => (format!("docker://{}/{}", c.endpoint, c.container), 0),
+                Check::Grpc(c) => (
+                    format!(
+                        "{}://{}:{}",
+                        if c.use_tls { "grpcs" } else { "grpc" },
+                        host_config.address,
+                        c.port
+                    ),
+                    c.port,
+                ),
             };
 
             initial_statuses.push(TargetStatus::new(
@@ -133,6 +194,13 @@ pub async fn run_monitoring_loop(
                 monitor_port,
             ));
 
+            if let Check::Push(p) = check {
+                crate::monitoring::push::register_token(&p.token);
+            }
+            if let Some(st) = initial_statuses.last_mut() {
+                st.group = host_config.group.clone();
+                st.tags = host_config.tags.clone();
+            }
             let status_index = initial_statuses.len() - 1;
             let app_cfg = Arc::clone(&app_config);
             let statuses_clone = Arc::clone(&shared_statuses);
@@ -184,17 +252,16 @@ pub async fn run_monitoring_loop(
                                     },
                                     _ => None,
                                 };
+                                let failures_before = entry.consecutive_failures;
                                 entry.add_check_result(is_healthy, None, error_msg);
                                 if is_healthy {
-                                    if entry.consecutive_failures > 0 {
+                                    if failures_before > 0 {
                                         info!(
                                             "Target {} recovered after {} failures.",
-                                            alias_clone, entry.consecutive_failures
+                                            alias_clone, failures_before
                                         );
                                     }
-                                    entry.consecutive_failures = 0;
                                 } else {
-                                    entry.consecutive_failures += 1;
                                     let reason = match &result {
                                         CheckResult::Tcp(r) => match &r.status {
                                             CheckStatus::Unhealthy(m) => m.clone(),
@@ -252,21 +319,20 @@ pub async fn run_monitoring_loop(
                                     },
                                     _ => None,
                                 };
+                                let failures_before = entry.consecutive_failures;
                                 entry.add_check_result(
                                     is_healthy,
                                     Some(http_result.response_time_ms),
                                     error_msg,
                                 );
                                 if is_healthy {
-                                    if entry.consecutive_failures > 0 {
+                                    if failures_before > 0 {
                                         info!(
                                             "Target {} recovered after {} failures.",
-                                            alias_clone, entry.consecutive_failures
+                                            alias_clone, failures_before
                                         );
                                     }
-                                    entry.consecutive_failures = 0;
                                 } else {
-                                    entry.consecutive_failures += 1;
                                     let reason = match &result {
                                         CheckResult::Http(r) => match &r.status {
                                             CheckStatus::Unhealthy(m) => m.clone(),
@@ -515,6 +581,32 @@ pub async fn run_monitoring_loop(
                             )
                             .await;
                         }
+
+                        // ── Ping / DNS / Push / WebSocket / SMTP / NTP / MQTT ────────────
+                        other => {
+                            if let Some((kind, svc)) =
+                                run_protocol_check(other, &host_addr, interval).await
+                            {
+                                let is_healthy = matches!(svc.status, CheckStatus::Healthy);
+                                info!(
+                                    "Performed {} check for target: {} (healthy: {}, {}ms)",
+                                    kind.as_str(),
+                                    alias_clone,
+                                    is_healthy,
+                                    svc.response_time_ms
+                                );
+                                result = CheckResult::Protocol(kind, svc);
+                                update_service_status(
+                                    &statuses_clone,
+                                    status_index,
+                                    &alias_clone,
+                                    result.clone(),
+                                    is_healthy,
+                                    kind.as_str(),
+                                )
+                                .await;
+                            }
+                        }
                     }
 
                     sleep(Duration::from_secs(interval)).await;
@@ -528,9 +620,41 @@ pub async fn run_monitoring_loop(
         *statuses = initial_statuses;
     }
 
+    // Registered-domain expiry (RDAP), one task per opted-in host.
+    for host_config in app_config.hosts.iter().filter(|h| h.check_domain_expiry) {
+        let (host, domain) = (host_config.address.clone(), host_config.domain_name.clone());
+        let hours = app_config.domain_expiry_check_interval_hours;
+        let statuses = Arc::clone(&shared_statuses);
+        tokio::spawn(crate::monitoring::domain_expiry::run_domain_expiry_task(
+            host, domain, hours, statuses,
+        ));
+    }
+
     loop {
         sleep(Duration::from_secs(app_config.monitoring_interval_seconds)).await;
     }
+}
+
+/// Runs one of the additional protocol checks. Returns `None` for check types
+/// that are handled by dedicated arms in the monitoring loop.
+async fn run_protocol_check(
+    check: &Check,
+    host: &str,
+    interval_secs: u64,
+) -> Option<(ProtocolKind, ServiceCheckResult)> {
+    Some(match check {
+        Check::Ping(c) => (ProtocolKind::Ping, check_ping(host, c).await),
+        Check::Dns(c) => (ProtocolKind::Dns, check_dns(c).await),
+        Check::Push(c) => (ProtocolKind::Push, check_push(c, interval_secs)),
+        Check::WebSocket(c) => (ProtocolKind::WebSocket, check_websocket(host, c).await),
+        Check::Smtp(c) => (ProtocolKind::Smtp, check_smtp(host, c).await),
+        Check::Ntp(c) => (ProtocolKind::Ntp, check_ntp(host, c).await),
+        Check::Mqtt(c) => (ProtocolKind::Mqtt, check_mqtt(host, c).await),
+        Check::Grpc(c) => (ProtocolKind::Grpc, check_grpc(host, c).await),
+        Check::Snmp(c) => (ProtocolKind::Snmp, check_snmp(host, c).await),
+        Check::Docker(c) => (ProtocolKind::Docker, check_docker(c).await),
+        _ => return None,
+    })
 }
 
 /// Normalise the return value of `check_tcp_port` into a `TcpCheckResult`.
@@ -591,7 +715,8 @@ async fn update_service_status(
             | CheckResult::Kafka(r)
             | CheckResult::MySQL(r)
             | CheckResult::MongoDB(r)
-            | CheckResult::Elasticsearch(r) => {
+            | CheckResult::Elasticsearch(r)
+            | CheckResult::Protocol(_, r) => {
                 let err = if !is_healthy_now {
                     match &r.status {
                         CheckStatus::Unhealthy(m) => Some(m.clone()),
@@ -605,18 +730,18 @@ async fn update_service_status(
             _ => (None, None),
         };
 
+        let failures_before = entry.consecutive_failures;
+
         entry.add_check_result(is_healthy_now, response_time_ms, error_message);
 
         if is_healthy_now {
-            if entry.consecutive_failures > 0 {
+            if failures_before > 0 {
                 info!(
                     "Target {} recovered after {} failures.",
-                    alias, entry.consecutive_failures
+                    alias, failures_before
                 );
             }
-            entry.consecutive_failures = 0;
         } else {
-            entry.consecutive_failures += 1;
             let reason = match &current_check_result {
                 CheckResult::Postgres(r)
                 | CheckResult::Redis(r)
@@ -624,7 +749,8 @@ async fn update_service_status(
                 | CheckResult::Kafka(r)
                 | CheckResult::MySQL(r)
                 | CheckResult::MongoDB(r)
-                | CheckResult::Elasticsearch(r) => match &r.status {
+                | CheckResult::Elasticsearch(r)
+                | CheckResult::Protocol(_, r) => match &r.status {
                     CheckStatus::Unhealthy(m) => m.clone(),
                     _ => format!("Unknown {} error", check_type),
                 },

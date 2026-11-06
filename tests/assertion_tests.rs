@@ -1,4 +1,3 @@
-use reqwest;
 use uptime_monitor::config::*;
 use uptime_monitor::test_utils::*;
 
@@ -260,19 +259,16 @@ fn test_complex_assertion_combinations() {
 
     // Manually test each assertion
     for assertion in assertions {
-        match &assertion.query {
-            AssertionQuery::JsonPath { path } => {
-                let results = jsonpath_lib::select(&json, &path).unwrap();
-                if !results.is_empty() {
-                    let actual = results[0];
-                    assert!(evaluate_predicate(
-                        &assertion.predicate,
-                        actual,
-                        &assertion.value
-                    ));
-                }
+        if let AssertionQuery::JsonPath { path } = &assertion.query {
+            let results = jsonpath_lib::select(&json, path).unwrap();
+            if !results.is_empty() {
+                let actual = results[0];
+                assert!(evaluate_predicate(
+                    &assertion.predicate,
+                    actual,
+                    &assertion.value
+                ));
             }
-            _ => {}
         }
     }
 }
@@ -290,14 +286,14 @@ fn test_negative_assertions() {
     // Test NotEquals predicate
     let results = jsonpath_lib::select(&json, "$.args.test_param").unwrap();
     assert!(!values_equal(
-        &results[0],
+        results[0],
         &AssertionValue::String("goodbye".to_string())
     ));
 
     // Test NotContains predicate
     let url_results = jsonpath_lib::select(&json, "$.url").unwrap();
     assert!(!string_predicate(
-        &url_results[0],
+        url_results[0],
         &AssertionValue::String("forbidden".to_string()),
         |a, b| a.contains(b)
     ));

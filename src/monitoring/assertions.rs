@@ -1,6 +1,4 @@
-use crate::config::{
-    AssertionPredicate, AssertionQuery, AssertionValue, CertificateField, HttpAssertion,
-};
+use crate::config::{AssertionPredicate, AssertionQuery, AssertionValue, HttpAssertion};
 use crate::monitoring::types::AssertionResult;
 use http::{HeaderMap, StatusCode};
 use jsonpath_lib as jsonpath;
@@ -134,7 +132,7 @@ fn evaluate_single_assertion_with_data(
     }
 }
 
-fn evaluate_predicate(
+pub fn evaluate_predicate(
     predicate: &AssertionPredicate,
     actual: &serde_json::Value,
     expected: &AssertionValue,
