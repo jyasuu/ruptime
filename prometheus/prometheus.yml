@@ -29,5 +29,9 @@ scrape_configs:
 
   - job_name: 'uptime'
     scrape_interval: 5s
+    # If RUPTIME_API_TOKEN is set on the app, uncomment and mount a file containing the token:
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/ruptime_token
     static_configs:
       - targets: ['rust-app:8080']

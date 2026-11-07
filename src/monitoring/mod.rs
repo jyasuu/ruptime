@@ -1,5 +1,6 @@
 pub mod assertions;
 pub mod auth;
+mod check_info;
 pub mod checks;
 pub mod domain_expiry;
 pub mod monitoring_loop;

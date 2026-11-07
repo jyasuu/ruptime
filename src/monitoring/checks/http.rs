@@ -564,10 +564,12 @@ mod tests {
 
     #[test]
     fn url_building() {
-        let mut c = HttpCheck::default();
-        c.port = 8443;
-        c.protocol = HttpProtocol::Https;
-        c.path = "health".into();
+        let c = HttpCheck {
+            port: 8443,
+            protocol: HttpProtocol::Https,
+            path: "health".into(),
+            ..Default::default()
+        };
         assert_eq!(
             build_url("example.com", &c),
             "https://example.com:8443/health"

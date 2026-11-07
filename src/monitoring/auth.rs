@@ -57,10 +57,10 @@ fn raw_http_post(url: &str, body: &str) -> Result<String, String> {
 }
 
 fn parse_url(url: &str) -> Result<(bool, String, u16, String), String> {
-    let (is_https, rest) = if url.starts_with("https://") {
-        (true, &url[8..])
-    } else if url.starts_with("http://") {
-        (false, &url[7..])
+    let (is_https, rest) = if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
     } else {
         return Err(format!("URL must start with http:// or https://: {}", url));
     };

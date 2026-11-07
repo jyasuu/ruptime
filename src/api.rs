@@ -13,6 +13,77 @@ use urlencoding::decode;
 const CONTENT_TYPE_PROMETHEUS: &str = "text/plain; version=0.0.4; charset=utf-8";
 const CONTENT_TYPE_SVG: &str = "image/svg+xml; charset=utf-8";
 
+/// Env var holding the bearer token that protects `/metrics` and `/api/monitors`.
+pub const API_TOKEN_ENV: &str = "RUPTIME_API_TOKEN";
+
+/// Optional bearer-token guard. With no token configured the endpoints stay open
+/// (the historical behaviour); badges and the push endpoint are never guarded.
+#[derive(Clone, Debug, Default)]
+pub struct ApiAuth {
+    token: Option<String>,
+}
+
+impl ApiAuth {
+    pub fn new(token: Option<String>) -> Self {
+        // An empty token would accept an empty bearer value, so treat it as unset.
+        Self {
+            token: token.filter(|t| !t.is_empty()),
+        }
+    }
+
+    pub fn from_env() -> Self {
+        Self::new(std::env::var(API_TOKEN_ENV).ok())
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.token.is_some()
+    }
+
+    fn allows(&self, req: &HttpRequest) -> bool {
+        let Some(expected) = &self.token else {
+            return true;
+        };
+        let presented = req
+            .headers()
+            .get(actix_web::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+        match presented {
+            Some(p) => constant_time_eq(p.as_bytes(), expected.as_bytes()),
+            None => false,
+        }
+    }
+}
+
+/// Compares without short-circuiting on the first differing byte, so response time
+/// does not reveal how much of a guessed token was correct.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = a.len() ^ b.len();
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        diff |= (x ^ y) as usize;
+    }
+    diff == 0
+}
+
+/// `None` when the request may proceed, otherwise the 401 to send back.
+fn check_auth(req: &HttpRequest) -> Option<HttpResponse> {
+    let allowed = match req.app_data::<web::Data<ApiAuth>>() {
+        Some(auth) => auth.allows(req),
+        None => true, // no guard registered (e.g. handler unit tests)
+    };
+    if allowed {
+        None
+    } else {
+        Some(
+            HttpResponse::Unauthorized()
+                .insert_header(("WWW-Authenticate", "Bearer"))
+                .json(serde_json::json!({"error": "unauthorized"})),
+        )
+    }
+}
+
 // --- Prometheus Metric Definitions ---
 const HELP_MONITOR_STATUS: &str =
     "# HELP monitor_status Current health status of the monitor (0=DOWN, 1=UP).";
@@ -369,7 +440,10 @@ async fn badges_list_handler(
 async fn monitors_api_handler(
     req: HttpRequest,
     data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>,
-) -> impl Responder {
+) -> HttpResponse {
+    if let Some(denied) = check_auth(&req) {
+        return denied;
+    }
     let lang = request_lang(&req);
     let tag_filter = query_param(&req, "tag");
     let group_filter = query_param(&req, "group");
@@ -476,7 +550,13 @@ async fn push_handler(req: HttpRequest, path: web::Path<String>) -> impl Respond
 }
 
 #[get("/metrics")]
-async fn metrics_handler(data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>) -> impl Responder {
+async fn metrics_handler(
+    req: HttpRequest,
+    data: web::Data<Arc<Mutex<Vec<TargetStatus>>>>,
+) -> HttpResponse {
+    if let Some(denied) = check_auth(&req) {
+        return denied;
+    }
     let statuses = data.lock().await; // Changed to .await for tokio::sync::Mutex
 
     let mut custom_metrics_output = String::new();
@@ -693,8 +773,22 @@ pub async fn start_web_server(
     shared_statuses: Arc<Mutex<Vec<TargetStatus>>>, // This type now correctly refers to tokio::sync::Mutex due to the import change
 ) -> std::io::Result<()> {
     info!("Starting HTTP server at http://{}", address);
+    let auth = ApiAuth::from_env();
+    if auth.is_enabled() {
+        info!(
+            "Bearer auth enabled for /metrics and /api/monitors ({})",
+            API_TOKEN_ENV
+        );
+    } else {
+        log::warn!(
+            "{} is not set: /metrics and /api/monitors are unauthenticated",
+            API_TOKEN_ENV
+        );
+    }
+    let auth = web::Data::new(auth);
     HttpServer::new(move || {
         App::new()
+            .app_data(auth.clone())
             .app_data(web::Data::new(shared_statuses.clone()))
             .service(metrics_handler)
             .service(badge_handler)
@@ -721,6 +815,7 @@ mod tests {
     use actix_web::test as actix_test; // Renamed to avoid conflict
 
     // Helper to create a TargetStatus for testing
+    #[allow(clippy::too_many_arguments)] // flat test fixture; a builder would only add noise
     fn create_test_target_status(
         alias: &str,
         is_healthy: bool,
@@ -1350,5 +1445,80 @@ mod tests {
         .unwrap();
         assert!(body.contains("monitor_type=\"mqtt\""));
         assert!(body.contains("monitor_response_time{monitor_name=\"mq\""));
+    }
+
+    // --- Bearer auth guard ---
+
+    async fn auth_status(token: Option<&str>, header: Option<&str>, path: &str) -> u16 {
+        let data: Arc<Mutex<Vec<TargetStatus>>> = Arc::new(Mutex::new(Vec::new()));
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(web::Data::new(ApiAuth::new(token.map(String::from))))
+                .app_data(web::Data::new(data))
+                .service(metrics_handler)
+                .service(monitors_api_handler)
+                .service(badges_list_handler),
+        )
+        .await;
+        let mut req = actix_test::TestRequest::get().uri(path);
+        if let Some(h) = header {
+            req = req.insert_header(("Authorization", h));
+        }
+        actix_test::call_service(&app, req.to_request())
+            .await
+            .status()
+            .as_u16()
+    }
+
+    #[actix_web::test]
+    async fn auth_disabled_by_default_keeps_endpoints_open() {
+        assert_eq!(auth_status(None, None, "/metrics").await, 200);
+        assert_eq!(auth_status(None, None, "/api/monitors").await, 200);
+        // an empty token counts as unset rather than "accept empty bearer"
+        assert_eq!(auth_status(Some(""), None, "/metrics").await, 200);
+    }
+
+    #[actix_web::test]
+    async fn auth_rejects_missing_or_wrong_token() {
+        for path in ["/metrics", "/api/monitors"] {
+            assert_eq!(auth_status(Some("s3cret"), None, path).await, 401);
+            assert_eq!(
+                auth_status(Some("s3cret"), Some("Bearer nope"), path).await,
+                401
+            );
+            assert_eq!(
+                auth_status(Some("s3cret"), Some("Bearer s3cre"), path).await,
+                401
+            );
+            assert_eq!(
+                auth_status(Some("s3cret"), Some("Bearer s3cretx"), path).await,
+                401
+            );
+            assert_eq!(auth_status(Some("s3cret"), Some("s3cret"), path).await, 401);
+            assert_eq!(
+                auth_status(Some("s3cret"), Some("Basic czNjcmV0"), path).await,
+                401
+            );
+        }
+    }
+
+    #[actix_web::test]
+    async fn auth_accepts_correct_token_and_leaves_badges_open() {
+        for path in ["/metrics", "/api/monitors"] {
+            assert_eq!(
+                auth_status(Some("s3cret"), Some("Bearer s3cret"), path).await,
+                200
+            );
+        }
+        assert_eq!(auth_status(Some("s3cret"), None, "/badges").await, 200);
+    }
+
+    #[test]
+    fn constant_time_eq_matches_normal_equality() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"abcd", b"abc"));
     }
 }

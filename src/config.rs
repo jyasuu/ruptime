@@ -302,6 +302,8 @@ pub struct HostConfig {
     pub domain_name: Option<String>,
 }
 
+// Built once at config load, never on a hot path, so boxing the large variants buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")] // Allows using a 'type' field in TOML to distinguish enum variants
 pub enum Check {

@@ -26,28 +26,6 @@ fn create_httpbin_https_check(path: &str, method: HttpMethod, expected_status: u
     }
 }
 
-/// Test helper to create HTTP httpbin check  
-fn create_httpbin_http_check(path: &str, method: HttpMethod, expected_status: u16) -> HttpCheck {
-    HttpCheck {
-        port: 80,
-        path: path.to_string(),
-        protocol: HttpProtocol::Http,
-        method,
-        timeout_seconds: 10,
-        check_ssl_certificate: false,
-        expected_status_code: expected_status,
-        body_regex_check: None,
-        auth: None,
-        headers: None,
-        assertions: Some(vec![HttpAssertion {
-            query: AssertionQuery::Status,
-            predicate: AssertionPredicate::Equals,
-            value: AssertionValue::Integer(expected_status as i64),
-        }]),
-        ..Default::default()
-    }
-}
-
 /// Test helper to create JSON path assertion
 fn create_json_assertion(
     json_path: &str,

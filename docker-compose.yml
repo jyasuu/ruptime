@@ -9,6 +9,9 @@ services:
     environment:
       TEST_CONFIG_PATH: /app/config.toml
       RUST_LOG: debug
+      # Uncomment to require a bearer token on /metrics and /api/monitors
+      # (also set it in prometheus/prometheus.yml). Pass via env, don't commit it.
+      # RUPTIME_API_TOKEN: ${RUPTIME_API_TOKEN}
     volumes:
       - ./config.toml:/app/config.toml
     
@@ -51,6 +54,10 @@ services:
       - "3000:3000"
     env_file:
       - ./grafana/.env
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # Required: compose refuses to start Grafana until this is set (see .env.example)
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env (see .env.example)}
     volumes:
       # /!\ To be modified depending on your needs /!\
       - ./grafana/data:/var/lib/grafana

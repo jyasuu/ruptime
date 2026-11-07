@@ -11,8 +11,12 @@ RUN apt-get update && \
 # Set the working directory
 WORKDIR /usr/src/app
 
-# Cache dependencies
-COPY Cargo.toml Cargo.lock ./
+# Cargo features to compile in. Defaults to the pure-Rust DB checks so they work
+# out of the box. Kafka is opt-in because librdkafka is a C library that is
+# painful to cross-build on musl:
+#   docker build --build-arg FEATURES="postgres,redis,kafka" .
+#   docker build --build-arg FEATURES="" .   # HTTP/TCP/DNS/etc. only
+ARG FEATURES="postgres,redis,mysql,mongodb,rabbitmq"
 
 # Copy source code
 COPY . .
@@ -20,7 +24,7 @@ COPY . .
 # Build the project in release mode
 RUN apt-get update && apt-get install -y musl-tools
 RUN rustup target add x86_64-unknown-linux-musl
-RUN cargo build --release --target=x86_64-unknown-linux-musl
+RUN cargo build --release --target=x86_64-unknown-linux-musl --features "${FEATURES}"
 
 
 # Stage 2: Runtime

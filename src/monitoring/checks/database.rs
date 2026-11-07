@@ -297,19 +297,20 @@ pub async fn check_postgres(address: &str, config: &PostgresCheck) -> ServiceChe
 pub async fn check_redis(address: &str, config: &RedisCheck) -> ServiceCheckResult {
     let start_time = Instant::now();
 
-    let connection_info = redis::ConnectionInfo {
-        addr: redis::ConnectionAddr::Tcp(address.to_string(), config.port),
-        redis: redis::RedisConnectionInfo {
-            db: config.database as i64,
-            username: None,
-            password: config.password.clone(),
-            protocol: redis::ProtocolVersion::RESP2,
-        },
-    };
+    let mut redis_settings = redis::RedisConnectionInfo::default()
+        .set_db(config.database as i64)
+        .set_protocol(redis::ProtocolVersion::RESP2);
+    if let Some(password) = &config.password {
+        redis_settings = redis_settings.set_password(password);
+    }
+    use redis::IntoConnectionInfo;
+    let connection_info = redis::ConnectionAddr::Tcp(address.to_string(), config.port)
+        .into_connection_info()
+        .map(|info| info.set_redis_settings(redis_settings));
 
     use tokio::time::timeout;
     match timeout(Duration::from_secs(config.timeout_seconds), async {
-        let client = redis::Client::open(connection_info)?;
+        let client = redis::Client::open(connection_info?)?;
         let mut conn = client.get_multiplexed_async_connection().await?;
         let info: String = redis::cmd("INFO")
             .arg("server")
@@ -551,14 +552,8 @@ pub async fn check_mongodb(address: &str, config: &MongoDBCheck) -> ServiceCheck
     {
         Ok(Ok(client)) => {
             let db = client.database(&config.database);
-            match db
-                .run_command(mongodb::bson::doc! { "ping": 1 }, None)
-                .await
-            {
-                Ok(_) => match db
-                    .run_command(mongodb::bson::doc! { "buildInfo": 1 }, None)
-                    .await
-                {
+            match db.run_command(mongodb::bson::doc! { "ping": 1 }).await {
+                Ok(_) => match db.run_command(mongodb::bson::doc! { "buildInfo": 1 }).await {
                     Ok(info) => ServiceCheckResult {
                         status: CheckStatus::Healthy,
                         response_time_ms: start_time.elapsed().as_millis(),
@@ -678,4 +673,69 @@ pub async fn check_elasticsearch(address: &str, config: &ElasticsearchCheck) -> 
             service_info: None,
         }
     }
+}
+
+/// Result reported for a check whose cargo feature was not compiled in.
+#[cfg(not(all(
+    feature = "postgres",
+    feature = "redis",
+    feature = "rabbitmq",
+    feature = "kafka",
+    feature = "mysql",
+    feature = "mongodb"
+)))]
+fn feature_disabled(feature: &str) -> ServiceCheckResult {
+    ServiceCheckResult {
+        status: CheckStatus::Unhealthy(format!("{} feature not enabled", feature)),
+        response_time_ms: 0,
+        service_info: None,
+    }
+}
+
+#[cfg(not(feature = "postgres"))]
+pub async fn check_postgres(
+    _address: &str,
+    _config: &crate::config::PostgresCheck,
+) -> ServiceCheckResult {
+    feature_disabled("postgres")
+}
+
+#[cfg(not(feature = "redis"))]
+pub async fn check_redis(
+    _address: &str,
+    _config: &crate::config::RedisCheck,
+) -> ServiceCheckResult {
+    feature_disabled("redis")
+}
+
+#[cfg(not(feature = "rabbitmq"))]
+pub async fn check_rabbitmq(
+    _address: &str,
+    _config: &crate::config::RabbitMQCheck,
+) -> ServiceCheckResult {
+    feature_disabled("rabbitmq")
+}
+
+#[cfg(not(feature = "kafka"))]
+pub async fn check_kafka(
+    _address: &str,
+    _config: &crate::config::KafkaCheck,
+) -> ServiceCheckResult {
+    feature_disabled("kafka")
+}
+
+#[cfg(not(feature = "mysql"))]
+pub async fn check_mysql(
+    _address: &str,
+    _config: &crate::config::MySQLCheck,
+) -> ServiceCheckResult {
+    feature_disabled("mysql")
+}
+
+#[cfg(not(feature = "mongodb"))]
+pub async fn check_mongodb(
+    _address: &str,
+    _config: &crate::config::MongoDBCheck,
+) -> ServiceCheckResult {
+    feature_disabled("mongodb")
 }

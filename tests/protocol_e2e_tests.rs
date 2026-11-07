@@ -351,11 +351,21 @@ async fn spawn_dns() -> u16 {
             if n < 12 {
                 continue;
             }
-            // question section = everything after the 12-byte header
+            // Echo only the question section (qname + 2-byte type + 2-byte class).
+            // Clients may append an EDNS0 OPT record after it, which must not be copied
+            // back into the answer section.
+            let mut end = 12;
+            while end < n && b[end] != 0 {
+                end += b[end] as usize + 1;
+            }
+            let qend = end + 1 + 4;
+            if qend > n {
+                continue;
+            }
             let mut resp = Vec::new();
             resp.extend_from_slice(&b[0..2]); // id
             resp.extend_from_slice(&[0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
-            resp.extend_from_slice(&b[12..n]);
+            resp.extend_from_slice(&b[12..qend]);
             resp.extend_from_slice(&[0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 7]);
             let _ = sock.send_to(&resp, peer).await;
         }
@@ -536,7 +546,7 @@ async fn spawn_grpc(status: u8) -> u16 {
                         let ok_path = parts.uri.path() == "/grpc.health.v1.Health/Check";
                         // Echo back whether the requested service name was "known".
                         let known = received.len() < 6 || received.ends_with(b"known");
-                        let resp = http02::Response::builder()
+                        let resp = ::http::Response::builder()
                             .status(200)
                             .header("content-type", "application/grpc")
                             .body(())
@@ -552,7 +562,7 @@ async fn spawn_grpc(status: u8) -> u16 {
                         let msg = [0u8, 0, 0, 0, 2, 0x08, st];
                         send.send_data(bytes::Bytes::copy_from_slice(&msg), false)
                             .unwrap();
-                        let mut trailers = http02::HeaderMap::new();
+                        let mut trailers = ::http::HeaderMap::new();
                         trailers.insert("grpc-status", "0".parse().unwrap());
                         send.send_trailers(trailers).unwrap();
                     });

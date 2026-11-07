@@ -99,9 +99,12 @@ pub async fn check_ping(address: &str, cfg: &PingCheck) -> ServiceCheckResult {
 // ─── DNS ─────────────────────────────────────────────────────────────────────
 
 pub async fn check_dns(cfg: &DnsCheck) -> ServiceCheckResult {
-    use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
+    use hickory_resolver::config::{
+        ConnectionConfig, NameServerConfig, ResolverConfig, ResolverOpts,
+    };
+    use hickory_resolver::net::runtime::TokioRuntimeProvider;
     use hickory_resolver::proto::rr::RecordType;
-    use hickory_resolver::TokioAsyncResolver;
+    use hickory_resolver::{Resolver, TokioResolver};
 
     let start = Instant::now();
     let mut opts = ResolverOpts::default();
@@ -109,24 +112,38 @@ pub async fn check_dns(cfg: &DnsCheck) -> ServiceCheckResult {
     opts.attempts = 1;
     opts.cache_size = 0; // always hit the server; we are monitoring it
 
-    let resolver = match &cfg.resolver {
+    let built = match &cfg.resolver {
         Some(r) => {
             let ip: IpAddr = match r.parse() {
                 Ok(ip) => ip,
                 Err(_) => return fail(start, format!("Resolver '{}' is not an IP address", r)),
             };
-            let ns = NameServerConfigGroup::from_ips_clear(&[ip], cfg.port, true);
-            TokioAsyncResolver::tokio(ResolverConfig::from_parts(None, vec![], ns), opts)
+            let mut udp = ConnectionConfig::udp();
+            udp.port = cfg.port;
+            let mut tcp = ConnectionConfig::tcp();
+            tcp.port = cfg.port;
+            let ns = NameServerConfig::new(ip, true, vec![udp, tcp]);
+            Resolver::builder_with_config(
+                ResolverConfig::from_parts(None, vec![], vec![ns]),
+                TokioRuntimeProvider::default(),
+            )
+            .with_options(opts)
+            .build()
         }
-        None => match hickory_resolver::system_conf::read_system_conf() {
-            Ok((conf, mut sys_opts)) => {
+        None => match TokioResolver::builder_tokio() {
+            Ok(mut builder) => {
+                let sys_opts = builder.options_mut();
                 sys_opts.timeout = opts.timeout;
                 sys_opts.attempts = 1;
                 sys_opts.cache_size = 0;
-                TokioAsyncResolver::tokio(conf, sys_opts)
+                builder.build()
             }
             Err(e) => return fail(start, format!("Cannot read system resolver config: {}", e)),
         },
+    };
+    let resolver = match built {
+        Ok(r) => r,
+        Err(e) => return fail(start, format!("Cannot build DNS resolver: {}", e)),
     };
 
     let rt = match cfg.record_type {
@@ -147,7 +164,7 @@ pub async fn check_dns(cfg: &DnsCheck) -> ServiceCheckResult {
             Err(_) => return fail(start, "PTR query must be an IP address"),
         };
         match resolver.reverse_lookup(ip).await {
-            Ok(l) => l.iter().map(|n| n.to_string()).collect(),
+            Ok(l) => l.answers().iter().map(|r| r.data.to_string()).collect(),
             Err(e) => {
                 return fail(
                     start,
@@ -157,7 +174,7 @@ pub async fn check_dns(cfg: &DnsCheck) -> ServiceCheckResult {
         }
     } else {
         match resolver.lookup(cfg.query.as_str(), rt).await {
-            Ok(l) => l.iter().map(|r| r.to_string()).collect(),
+            Ok(l) => l.answers().iter().map(|r| r.data.to_string()).collect(),
             Err(e) => {
                 return fail(
                     start,
@@ -281,7 +298,7 @@ pub async fn check_websocket(address: &str, cfg: &WebSocketCheck) -> ServiceChec
             .await
             .map_err(|e| format!("WebSocket handshake with {} failed: {}", url, e))?;
         if let Some(msg) = &cfg.send_message {
-            ws.send(Message::Text(msg.clone()))
+            ws.send(Message::Text(msg.clone().into()))
                 .await
                 .map_err(|e| format!("Send failed: {}", e))?;
         }

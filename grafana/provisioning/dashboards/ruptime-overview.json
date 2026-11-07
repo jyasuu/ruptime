@@ -352,7 +352,7 @@
       "id": 5,
       "type": "stat",
       "title": "Availability (selected range)",
-      "description": "Share of scrapes in the selected time range where the monitor was UP, averaged across the selected monitors. Resolution is the Prometheus scrape interval.",
+      "description": "Share of scrapes in the selected time range where the monitor was UP, averaged across the selected monitors. Resolution is limited by monitoring_interval_seconds (the gauge only changes when a check runs).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

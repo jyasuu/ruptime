@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+      # DB checks are feature-gated, so default-feature clippy never sees them.
+      # kafka is left out: it needs cmake and librdkafka.
+      - name: clippy (DB features)
+        run: cargo clippy --all-targets --features postgres,redis,mysql,mongodb,rabbitmq -- -D warnings
+      # Unit tests only: the tests/ integration suites call the real httpbin.org
+      # and are too flaky for a required check.
+      - name: unit tests
+        run: cargo test --lib --bins

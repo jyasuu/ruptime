@@ -1,11 +1,10 @@
 # Uptime Monitor - Project Roadmap
 
-This folder contains the project roadmap broken down into actionable tasks and implementation status tracking.
+This folder contains the project roadmap broken down into actionable tasks.
 
 ## Structure
 
 - `tasks/` - Individual task documents organized by category
-- `status/` - Implementation status tracking and progress reports
 
 ## Task Categories
 

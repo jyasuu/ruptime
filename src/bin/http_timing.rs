@@ -22,6 +22,7 @@ mod tls_ffi {
     #[repr(C)]
     pub struct SSL_CTX(c_void);
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)] // mirrors the OpenSSL C type name
     pub struct SSL(c_void);
     #[repr(C)]
     pub struct SSL_METHOD(c_void);
@@ -229,10 +230,10 @@ fn do_https(
 }
 
 fn parse_url(url: &str) -> Result<(bool, String, u16, String), String> {
-    let (is_https, rest) = if url.starts_with("https://") {
-        (true, &url[8..])
-    } else if url.starts_with("http://") {
-        (false, &url[7..])
+    let (is_https, rest) = if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
     } else {
         return Err("URL must start with http:// or https://".into());
     };

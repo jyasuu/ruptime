@@ -54,13 +54,55 @@ A comprehensive Rust-based uptime monitoring tool that checks the availability o
 
 The `/metrics` endpoint provides Prometheus-compatible metrics:
 
-- `uptime_status_health` - Service health status (1=UP, 0=DOWN)
-- `uptime_response_time_seconds` - Response time in seconds
-- `uptime_consecutive_failures_total` - Count of consecutive failures
-- `uptime_cert_expiry_seconds` - SSL certificate expiry time (HTTPS only)
-- `uptime_cert_is_valid` - Certificate validity status (HTTPS only)
+- `monitor_status` - Service health (1=UP, 0=DOWN)
+- `monitor_response_time` - Last response time in **milliseconds**
+- `monitor_consecutive_failures` - Consecutive failed checks (resets to 0 on recovery)
+- `monitor_cert_days_remaining` - Days until the TLS certificate expires (HTTPS only)
+- `monitor_cert_is_valid` - Certificate validity (1=valid, 0=invalid; HTTPS only)
+- `monitor_domain_days_remaining` - Days until domain registration expires (needs `check_domain_expiry = true`)
+- `monitor_group_status` - Group health (1 only if every member is UP)
+- `monitor_info` - Group and tags of each monitor (value always 1)
 
-All metrics include labels for `target_alias`, `target_host`, and `check_type` (HTTP, TCP, Postgres, Redis, MySQL, MongoDB, RabbitMQ, Kafka, Elasticsearch).
+Per-monitor metrics carry the labels `monitor_name`, `monitor_type`, `monitor_url`, `monitor_hostname` and `monitor_port`.
+
+A ready-made Grafana dashboard is provisioned from `grafana/provisioning/dashboards/ruptime-overview.json`
+(availability, latency, status history, TLS/domain expiry, groups).
+
+## 🐳 Full stack with Docker Compose
+
+Runs ruptime, Prometheus, Alertmanager and Grafana (with the provisioned **Ruptime / Uptime Overview** dashboard):
+
+```bash
+cp .env.example .env        # then set GRAFANA_ADMIN_PASSWORD (required; no default is shipped)
+docker compose up --build
+```
+
+Grafana is at http://localhost:3000. The admin password is only read when Grafana first creates its
+database, so to change it later use the Grafana UI (or delete `grafana/data` to start over).
+
+## 🔒 Securing `/metrics` and `/api/monitors`
+
+Set `RUPTIME_API_TOKEN` to require `Authorization: Bearer <token>` on `/metrics` and `/api/monitors`:
+
+```bash
+RUPTIME_API_TOKEN=$(openssl rand -hex 32) ./uptime_monitor
+curl -H "Authorization: Bearer $RUPTIME_API_TOKEN" http://localhost:8080/metrics
+```
+
+- Unset or empty: endpoints stay open, as before (a warning is logged at startup).
+- Badges and the push endpoint are **not** covered (push monitors have their own tokens).
+- Plain HTTP sends the token in clear text; put it behind TLS if it crosses an untrusted network.
+
+Prometheus scrape config:
+
+```yaml
+  - job_name: 'uptime'
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ruptime_token   # file containing only the token
+    static_configs:
+      - targets: ['rust-app:8080']
+```
 
 ## 🏷️ SVG Status Badges
 
@@ -648,8 +690,6 @@ mount `/var/run/docker.sock` or use `endpoint = "tcp://host:2375"`).
 
 **Domain expiry:** `check_domain_expiry = true` on a host queries RDAP and exports `monitor_domain_days_remaining`
 (and the `domain_expiry_days` field in the API). Some ccTLDs do not publish RDAP; those hosts simply report nothing.
-
-> Note: the metric names actually emitted are `monitor_*` (e.g. `monitor_status`), not the `uptime_*` names shown in older docs above.
 
 > **Metric fix:** `monitor_consecutive_failures` previously counted every failed check twice. It now counts each failed
 > check once, so existing alert thresholds on this metric effectively double in sensitivity-to-time (e.g. `>= 6` used to fire

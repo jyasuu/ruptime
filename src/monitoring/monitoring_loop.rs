@@ -1,30 +1,18 @@
-use crate::config::{AppConfig, Check, HttpProtocol};
+use crate::config::{AppConfig, Check};
 use crate::monitoring::checks::{
-    check_dns, check_docker, check_elasticsearch, check_grpc, check_http_target, check_mqtt,
-    check_ntp, check_ping, check_push, check_smtp, check_snmp, check_tcp_port, check_websocket,
+    check_dns, check_docker, check_elasticsearch, check_grpc, check_http_target, check_kafka,
+    check_mongodb, check_mqtt, check_mysql, check_ntp, check_ping, check_postgres, check_push,
+    check_rabbitmq, check_redis, check_smtp, check_snmp, check_tcp_port, check_websocket,
 };
 use crate::monitoring::types::{
     CheckResult, CheckStatus, HttpCheckResultDetails, ProtocolKind, ServiceCheckResult,
-    TargetStatus, TcpCheckResult,
+    TargetStatus,
 };
 use log::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-
-#[cfg(feature = "kafka")]
-use crate::monitoring::checks::check_kafka;
-#[cfg(feature = "mongodb")]
-use crate::monitoring::checks::check_mongodb;
-#[cfg(feature = "mysql")]
-use crate::monitoring::checks::check_mysql;
-#[cfg(feature = "postgres")]
-use crate::monitoring::checks::check_postgres;
-#[cfg(feature = "rabbitmq")]
-use crate::monitoring::checks::check_rabbitmq;
-#[cfg(feature = "redis")]
-use crate::monitoring::checks::check_redis;
 
 pub async fn run_monitoring_loop(
     app_config: Arc<AppConfig>,
@@ -41,574 +29,51 @@ pub async fn run_monitoring_loop(
         let host_alias = host_config.alias.as_deref().unwrap_or(&host_config.address);
 
         for check in &host_config.checks {
-            let check_name = match check {
-                Check::Tcp(c) => c.name.as_deref(),
-                Check::Http(c) => c.name.as_deref(),
-                Check::Postgres(c) => c.name.as_deref(),
-                Check::Redis(c) => c.name.as_deref(),
-                Check::RabbitMQ(c) => c.name.as_deref(),
-                Check::Kafka(c) => c.name.as_deref(),
-                Check::MySQL(c) => c.name.as_deref(),
-                Check::MongoDB(c) => c.name.as_deref(),
-                Check::Elasticsearch(c) => c.name.as_deref(),
-                Check::Ping(c) => c.name.as_deref(),
-                Check::Dns(c) => c.name.as_deref(),
-                Check::Push(c) => c.name.as_deref(),
-                Check::WebSocket(c) => c.name.as_deref(),
-                Check::Smtp(c) => c.name.as_deref(),
-                Check::Ntp(c) => c.name.as_deref(),
-                Check::Mqtt(c) => c.name.as_deref(),
-                Check::Grpc(c) => c.name.as_deref(),
-                Check::Snmp(c) => c.name.as_deref(),
-                Check::Docker(c) => c.name.as_deref(),
+            let target_alias = match check.name() {
+                Some(name) => name.to_string(),
+                None => format!("{} ({})", host_alias, check.type_label()),
             };
+            let (monitor_url, monitor_port) = check.monitor_target(&host_config.address);
 
-            let target_alias = if let Some(name) = check_name {
-                name.to_string()
-            } else {
-                let check_type_port = match check {
-                    Check::Tcp(c) => format!("TCP:{}", c.port),
-                    Check::Http(c) => format!("HTTP:{}", c.port),
-                    Check::Postgres(c) => format!("Postgres:{}", c.port),
-                    Check::Redis(c) => format!("Redis:{}", c.port),
-                    Check::RabbitMQ(c) => format!("RabbitMQ:{}", c.port),
-                    Check::Kafka(c) => format!("Kafka:{}", c.port),
-                    Check::MySQL(c) => format!("MySQL:{}", c.port),
-                    Check::MongoDB(c) => format!("MongoDB:{}", c.port),
-                    Check::Elasticsearch(c) => format!("Elasticsearch:{}", c.port),
-                    Check::Ping(_) => "Ping".to_string(),
-                    Check::Dns(c) => format!("DNS:{}", c.query),
-                    Check::Push(_) => "Push".to_string(), // never expose the token
-                    Check::WebSocket(c) => format!("WebSocket:{}", c.port),
-                    Check::Smtp(c) => format!("SMTP:{}", c.port),
-                    Check::Ntp(c) => format!("NTP:{}", c.port),
-                    Check::Mqtt(c) => format!("MQTT:{}", c.port),
-                    Check::Grpc(c) => format!("gRPC:{}", c.port),
-                    Check::Snmp(c) => format!("SNMP:{}", c.port),
-                    Check::Docker(c) => format!("Docker:{}", c.container),
-                };
-                format!("{} ({})", host_alias, check_type_port)
-            };
-
-            let (monitor_url, monitor_port) = match check {
-                Check::Tcp(c) => (format!("tcp://{}:{}", host_config.address, c.port), c.port),
-                Check::Http(c) => {
-                    let proto = match c.protocol {
-                        HttpProtocol::Http => "http",
-                        HttpProtocol::Https => "https",
-                    };
-                    (
-                        format!("{}://{}:{}{}", proto, host_config.address, c.port, c.path),
-                        c.port,
-                    )
-                }
-                Check::Postgres(c) => (
-                    format!(
-                        "postgres://{}:{}/{}",
-                        host_config.address, c.port, c.database
-                    ),
-                    c.port,
-                ),
-                Check::Redis(c) => (
-                    format!("redis://{}:{}/{}", host_config.address, c.port, c.database),
-                    c.port,
-                ),
-                Check::RabbitMQ(c) => (
-                    format!(
-                        "{}://{}:{}/{}",
-                        if c.use_ssl { "amqps" } else { "amqp" },
-                        host_config.address,
-                        c.port,
-                        c.vhost
-                    ),
-                    c.port,
-                ),
-                Check::Kafka(c) => (
-                    format!("kafka://{}:{}", host_config.address, c.port),
-                    c.port,
-                ),
-                Check::MySQL(c) => (
-                    format!("mysql://{}:{}/{}", host_config.address, c.port, c.database),
-                    c.port,
-                ),
-                Check::MongoDB(c) => (
-                    format!(
-                        "mongodb://{}:{}/{}",
-                        host_config.address, c.port, c.database
-                    ),
-                    c.port,
-                ),
-                Check::Elasticsearch(c) => (
-                    format!(
-                        "{}://{}:{}",
-                        if c.use_ssl { "https" } else { "http" },
-                        host_config.address,
-                        c.port
-                    ),
-                    c.port,
-                ),
-                Check::Ping(_) => (format!("ping://{}", host_config.address), 0),
-                Check::Dns(c) => (
-                    format!(
-                        "dns://{}/{}?type={:?}",
-                        c.resolver.as_deref().unwrap_or("system"),
-                        c.query,
-                        c.record_type
-                    ),
-                    c.port,
-                ),
-                Check::Push(_) => (format!("push://{}", host_config.address), 0),
-                Check::WebSocket(c) => (
-                    format!(
-                        "{}://{}:{}{}",
-                        if c.use_tls { "wss" } else { "ws" },
-                        host_config.address,
-                        c.port,
-                        c.path
-                    ),
-                    c.port,
-                ),
-                Check::Smtp(c) => (format!("smtp://{}:{}", host_config.address, c.port), c.port),
-                Check::Ntp(c) => (format!("ntp://{}:{}", host_config.address, c.port), c.port),
-                Check::Mqtt(c) => (format!("mqtt://{}:{}", host_config.address, c.port), c.port),
-                Check::Snmp(c) => (
-                    format!("snmp://{}:{}/{}", host_config.address, c.port, c.oid),
-                    c.port,
-                ),
-                Check::Docker(c) => (format!("docker://{}/{}", c.endpoint, c.container), 0),
-                Check::Grpc(c) => (
-                    format!(
-                        "{}://{}:{}",
-                        if c.use_tls { "grpcs" } else { "grpc" },
-                        host_config.address,
-                        c.port
-                    ),
-                    c.port,
-                ),
-            };
-
-            initial_statuses.push(TargetStatus::new(
+            let mut status = TargetStatus::new(
                 target_alias.clone(),
-                monitor_url,
+                monitor_url.clone(),
                 host_config.address.clone(),
                 monitor_port,
-            ));
+            );
+            status.group = host_config.group.clone();
+            status.tags = host_config.tags.clone();
+            initial_statuses.push(status);
+            let status_index = initial_statuses.len() - 1;
 
             if let Check::Push(p) = check {
                 crate::monitoring::push::register_token(&p.token);
             }
-            if let Some(st) = initial_statuses.last_mut() {
-                st.group = host_config.group.clone();
-                st.tags = host_config.tags.clone();
-            }
-            let status_index = initial_statuses.len() - 1;
+
             let app_cfg = Arc::clone(&app_config);
-            let statuses_clone = Arc::clone(&shared_statuses);
+            let statuses = Arc::clone(&shared_statuses);
             let host_addr = host_config.address.clone();
-            let check_clone = check.clone();
-            let alias_clone = target_alias.clone();
+            let check = check.clone();
 
             tokio::spawn(async move {
                 loop {
                     let interval = app_cfg.monitoring_interval_seconds;
-                    let result: CheckResult;
-
-                    match &check_clone {
-                        // ── TCP ──────────────────────────────────────────────────────────
-                        Check::Tcp(cfg) => {
-                            info!(
-                                "Performing TCP check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-
-                            // Accept whatever check_tcp_port returns and normalise to TcpCheckResult.
-                            // The return type may be Result<(),String> or TcpCheckResult depending on
-                            // the local version of tcp.rs — we call into() on a helper to handle both.
-                            let tcp_check_result = tcp_check_result_from(
-                                check_tcp_port(
-                                    &host_addr,
-                                    cfg.port,
-                                    Duration::from_secs(cfg.timeout_seconds),
-                                )
-                                .await,
-                            );
-
-                            let is_healthy =
-                                matches!(tcp_check_result.status, CheckStatus::Healthy);
-
-                            if is_healthy {
-                                info!("Target {} ({}) is healthy (TCP)", alias_clone, host_addr);
-                            }
-
-                            result = CheckResult::Tcp(tcp_check_result);
-
-                            let mut statuses = statuses_clone.lock().await;
-                            if let Some(entry) = statuses.get_mut(status_index) {
-                                entry.last_result = Some(result.clone());
-                                let error_msg = match &result {
-                                    CheckResult::Tcp(r) => match &r.status {
-                                        CheckStatus::Unhealthy(m) => Some(m.clone()),
-                                        _ => None,
-                                    },
-                                    _ => None,
-                                };
-                                let failures_before = entry.consecutive_failures;
-                                entry.add_check_result(is_healthy, None, error_msg);
-                                if is_healthy {
-                                    if failures_before > 0 {
-                                        info!(
-                                            "Target {} recovered after {} failures.",
-                                            alias_clone, failures_before
-                                        );
-                                    }
-                                } else {
-                                    let reason = match &result {
-                                        CheckResult::Tcp(r) => match &r.status {
-                                            CheckStatus::Unhealthy(m) => m.clone(),
-                                            _ => "Unknown TCP error".to_string(),
-                                        },
-                                        _ => "Unknown error".to_string(),
-                                    };
-                                    warn!("Target {} UNHEALTHY. Reason: {}. Consecutive failures: {}. Type: TCP", alias_clone, reason, entry.consecutive_failures);
-                                }
-                                debug!(
-                                    "[{}] Healthy: {}, Consecutive Failures: {}",
-                                    alias_clone, entry.is_healthy, entry.consecutive_failures
-                                );
-                            }
-                        }
-
-                        // ── HTTP ─────────────────────────────────────────────────────────
-                        Check::Http(cfg) => {
-                            let proto = match cfg.protocol {
-                                HttpProtocol::Http => "http",
-                                HttpProtocol::Https => "https",
-                            };
-                            info!(
-                                "Performing HTTP check for target: {} ({}://{}:{}{})",
-                                alias_clone, proto, host_addr, cfg.port, cfg.path
-                            );
-
-                            let http_result = check_http_target(&host_addr, cfg).await;
-                            let is_healthy = matches!(http_result.status, CheckStatus::Healthy);
-
-                            if is_healthy {
-                                info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (HTTP)",
-                                    alias_clone, host_addr, http_result.response_time_ms
-                                );
-                            }
-
-                            result = CheckResult::Http(HttpCheckResultDetails {
-                                status: http_result.status,
-                                response_time_ms: http_result.response_time_ms,
-                                cert_days_remaining: http_result.cert_days_remaining,
-                                cert_is_valid: http_result.cert_is_valid,
-                            });
-
-                            let mut statuses = statuses_clone.lock().await;
-                            if let Some(entry) = statuses.get_mut(status_index) {
-                                entry.last_result = Some(result.clone());
-                                entry.cert_days_remaining = http_result.cert_days_remaining;
-                                entry.cert_is_valid = http_result.cert_is_valid;
-
-                                let error_msg = match &result {
-                                    CheckResult::Http(r) => match &r.status {
-                                        CheckStatus::Unhealthy(m) => Some(m.clone()),
-                                        _ => None,
-                                    },
-                                    _ => None,
-                                };
-                                let failures_before = entry.consecutive_failures;
-                                entry.add_check_result(
-                                    is_healthy,
-                                    Some(http_result.response_time_ms),
-                                    error_msg,
-                                );
-                                if is_healthy {
-                                    if failures_before > 0 {
-                                        info!(
-                                            "Target {} recovered after {} failures.",
-                                            alias_clone, failures_before
-                                        );
-                                    }
-                                } else {
-                                    let reason = match &result {
-                                        CheckResult::Http(r) => match &r.status {
-                                            CheckStatus::Unhealthy(m) => m.clone(),
-                                            _ => "Unknown HTTP error".to_string(),
-                                        },
-                                        _ => "Unknown error".to_string(),
-                                    };
-                                    warn!("Target {} UNHEALTHY. Reason: {}. Consecutive failures: {}. Type: HTTP", alias_clone, reason, entry.consecutive_failures);
-                                }
-                                debug!(
-                                    "[{}] Healthy: {}, Consecutive Failures: {}",
-                                    alias_clone, entry.is_healthy, entry.consecutive_failures
-                                );
-                            }
-                        }
-
-                        // ── PostgreSQL ───────────────────────────────────────────────────
-                        Check::Postgres(cfg) => {
-                            info!(
-                                "Performing PostgreSQL check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-                            #[cfg(feature = "postgres")]
-                            let service_result = check_postgres(&host_addr, cfg).await;
-                            #[cfg(not(feature = "postgres"))]
-                            let service_result = ServiceCheckResult {
-                                status: CheckStatus::Unhealthy(
-                                    "postgres feature not enabled".to_string(),
-                                ),
-                                response_time_ms: 0,
-                                service_info: None,
-                            };
-                            let is_healthy = matches!(service_result.status, CheckStatus::Healthy);
-                            if is_healthy {
-                                info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (PostgreSQL)",
-                                    alias_clone, host_addr, service_result.response_time_ms
-                                );
-                            }
-                            result = CheckResult::Postgres(service_result);
-                            update_service_status(
-                                &statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                result.clone(),
-                                is_healthy,
-                                "PostgreSQL",
-                            )
-                            .await;
-                        }
-
-                        // ── Redis ────────────────────────────────────────────────────────
-                        Check::Redis(cfg) => {
-                            info!(
-                                "Performing Redis check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-                            #[cfg(feature = "redis")]
-                            let service_result = check_redis(&host_addr, cfg).await;
-                            #[cfg(not(feature = "redis"))]
-                            let service_result = ServiceCheckResult {
-                                status: CheckStatus::Unhealthy(
-                                    "redis feature not enabled".to_string(),
-                                ),
-                                response_time_ms: 0,
-                                service_info: None,
-                            };
-                            let is_healthy = matches!(service_result.status, CheckStatus::Healthy);
-                            if is_healthy {
-                                info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (Redis)",
-                                    alias_clone, host_addr, service_result.response_time_ms
-                                );
-                            }
-                            result = CheckResult::Redis(service_result);
-                            update_service_status(
-                                &statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                result.clone(),
-                                is_healthy,
-                                "Redis",
-                            )
-                            .await;
-                        }
-
-                        // ── RabbitMQ ─────────────────────────────────────────────────────
-                        Check::RabbitMQ(cfg) => {
-                            info!(
-                                "Performing RabbitMQ check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-                            #[cfg(feature = "rabbitmq")]
-                            let service_result = check_rabbitmq(&host_addr, cfg).await;
-                            #[cfg(not(feature = "rabbitmq"))]
-                            let service_result = ServiceCheckResult {
-                                status: CheckStatus::Unhealthy(
-                                    "rabbitmq feature not enabled".to_string(),
-                                ),
-                                response_time_ms: 0,
-                                service_info: None,
-                            };
-                            let is_healthy = matches!(service_result.status, CheckStatus::Healthy);
-                            if is_healthy {
-                                info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (RabbitMQ)",
-                                    alias_clone, host_addr, service_result.response_time_ms
-                                );
-                            }
-                            result = CheckResult::RabbitMQ(service_result);
-                            update_service_status(
-                                &statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                result.clone(),
-                                is_healthy,
-                                "RabbitMQ",
-                            )
-                            .await;
-                        }
-
-                        // ── Kafka ────────────────────────────────────────────────────────
-                        Check::Kafka(cfg) => {
-                            info!(
-                                "Performing Kafka check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-                            #[cfg(feature = "kafka")]
-                            let service_result = check_kafka(&host_addr, cfg).await;
-                            #[cfg(not(feature = "kafka"))]
-                            let service_result = ServiceCheckResult {
-                                status: CheckStatus::Unhealthy(
-                                    "kafka feature not enabled".to_string(),
-                                ),
-                                response_time_ms: 0,
-                                service_info: None,
-                            };
-                            let is_healthy = matches!(service_result.status, CheckStatus::Healthy);
-                            if is_healthy {
-                                info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (Kafka)",
-                                    alias_clone, host_addr, service_result.response_time_ms
-                                );
-                            }
-                            result = CheckResult::Kafka(service_result);
-                            update_service_status(
-                                &statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                result.clone(),
-                                is_healthy,
-                                "Kafka",
-                            )
-                            .await;
-                        }
-
-                        // ── MySQL ────────────────────────────────────────────────────────
-                        Check::MySQL(cfg) => {
-                            info!(
-                                "Performing MySQL check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-                            #[cfg(feature = "mysql")]
-                            let service_result = check_mysql(&host_addr, cfg).await;
-                            #[cfg(not(feature = "mysql"))]
-                            let service_result = ServiceCheckResult {
-                                status: CheckStatus::Unhealthy(
-                                    "mysql feature not enabled".to_string(),
-                                ),
-                                response_time_ms: 0,
-                                service_info: None,
-                            };
-                            let is_healthy = matches!(service_result.status, CheckStatus::Healthy);
-                            if is_healthy {
-                                info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (MySQL)",
-                                    alias_clone, host_addr, service_result.response_time_ms
-                                );
-                            }
-                            result = CheckResult::MySQL(service_result);
-                            update_service_status(
-                                &statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                result.clone(),
-                                is_healthy,
-                                "MySQL",
-                            )
-                            .await;
-                        }
-
-                        // ── MongoDB ──────────────────────────────────────────────────────
-                        Check::MongoDB(cfg) => {
-                            info!(
-                                "Performing MongoDB check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-                            #[cfg(feature = "mongodb")]
-                            let service_result = check_mongodb(&host_addr, cfg).await;
-                            #[cfg(not(feature = "mongodb"))]
-                            let service_result = ServiceCheckResult {
-                                status: CheckStatus::Unhealthy(
-                                    "mongodb feature not enabled".to_string(),
-                                ),
-                                response_time_ms: 0,
-                                service_info: None,
-                            };
-                            let is_healthy = matches!(service_result.status, CheckStatus::Healthy);
-                            if is_healthy {
-                                info!(
-                                    "Target {} ({}) is healthy. Response time: {}ms (MongoDB)",
-                                    alias_clone, host_addr, service_result.response_time_ms
-                                );
-                            }
-                            result = CheckResult::MongoDB(service_result);
-                            update_service_status(
-                                &statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                result.clone(),
-                                is_healthy,
-                                "MongoDB",
-                            )
-                            .await;
-                        }
-
-                        // ── Elasticsearch ────────────────────────────────────────────────
-                        Check::Elasticsearch(cfg) => {
-                            info!(
-                                "Performing Elasticsearch check for target: {} ({}:{})",
-                                alias_clone, host_addr, cfg.port
-                            );
-                            let service_result = check_elasticsearch(&host_addr, cfg).await;
-                            let is_healthy = matches!(service_result.status, CheckStatus::Healthy);
-                            if is_healthy {
-                                info!("Target {} ({}) is healthy. Response time: {}ms (Elasticsearch)", alias_clone, host_addr, service_result.response_time_ms);
-                            }
-                            result = CheckResult::Elasticsearch(service_result);
-                            update_service_status(
-                                &statuses_clone,
-                                status_index,
-                                &alias_clone,
-                                result.clone(),
-                                is_healthy,
-                                "Elasticsearch",
-                            )
-                            .await;
-                        }
-
-                        // ── Ping / DNS / Push / WebSocket / SMTP / NTP / MQTT ────────────
-                        other => {
-                            if let Some((kind, svc)) =
-                                run_protocol_check(other, &host_addr, interval).await
-                            {
-                                let is_healthy = matches!(svc.status, CheckStatus::Healthy);
-                                info!(
-                                    "Performed {} check for target: {} (healthy: {}, {}ms)",
-                                    kind.as_str(),
-                                    alias_clone,
-                                    is_healthy,
-                                    svc.response_time_ms
-                                );
-                                result = CheckResult::Protocol(kind, svc);
-                                update_service_status(
-                                    &statuses_clone,
-                                    status_index,
-                                    &alias_clone,
-                                    result.clone(),
-                                    is_healthy,
-                                    kind.as_str(),
-                                )
-                                .await;
-                            }
-                        }
-                    }
-
+                    info!(
+                        "Performing {} check for target: {} ({})",
+                        check.type_name(),
+                        target_alias,
+                        monitor_url
+                    );
+                    let outcome = run_check(&check, &host_addr, interval).await;
+                    record_outcome(
+                        &statuses,
+                        status_index,
+                        &target_alias,
+                        &host_addr,
+                        check.type_name(),
+                        outcome,
+                    )
+                    .await;
                     sleep(Duration::from_secs(interval)).await;
                 }
             });
@@ -635,135 +100,152 @@ pub async fn run_monitoring_loop(
     }
 }
 
-/// Runs one of the additional protocol checks. Returns `None` for check types
-/// that are handled by dedicated arms in the monitoring loop.
-async fn run_protocol_check(
-    check: &Check,
-    host: &str,
-    interval_secs: u64,
-) -> Option<(ProtocolKind, ServiceCheckResult)> {
-    Some(match check {
-        Check::Ping(c) => (ProtocolKind::Ping, check_ping(host, c).await),
-        Check::Dns(c) => (ProtocolKind::Dns, check_dns(c).await),
-        Check::Push(c) => (ProtocolKind::Push, check_push(c, interval_secs)),
-        Check::WebSocket(c) => (ProtocolKind::WebSocket, check_websocket(host, c).await),
-        Check::Smtp(c) => (ProtocolKind::Smtp, check_smtp(host, c).await),
-        Check::Ntp(c) => (ProtocolKind::Ntp, check_ntp(host, c).await),
-        Check::Mqtt(c) => (ProtocolKind::Mqtt, check_mqtt(host, c).await),
-        Check::Grpc(c) => (ProtocolKind::Grpc, check_grpc(host, c).await),
-        Check::Snmp(c) => (ProtocolKind::Snmp, check_snmp(host, c).await),
-        Check::Docker(c) => (ProtocolKind::Docker, check_docker(c).await),
-        _ => return None,
-    })
+/// What one execution of a check produced, normalised so that every check type goes
+/// through the same bookkeeping in [`record_outcome`].
+struct Outcome {
+    result: CheckResult,
+    healthy: bool,
+    /// Response time stored in the target's history. `None` leaves it unrecorded.
+    history_ms: Option<u128>,
+    /// Response time shown in logs.
+    log_ms: u128,
+    /// Failure reason; only set when unhealthy.
+    error: Option<String>,
+    /// `(days_remaining, is_valid)` for checks that probe a TLS certificate.
+    cert: Option<(Option<i64>, Option<bool>)>,
 }
 
-/// Normalise the return value of `check_tcp_port` into a `TcpCheckResult`.
-///
-/// The local `tcp.rs` may return either:
-///   - `TcpCheckResult`  (newer version)
-///   - `Result<(), String>` (original version)
-///
-/// This trait + two blanket impls let the call site compile against both without
-/// knowing which version is present.
-trait IntoTcpCheckResult {
-    fn into_tcp_check_result(self) -> TcpCheckResult;
-}
-
-// Newer tcp.rs already returns TcpCheckResult — pass through unchanged.
-impl IntoTcpCheckResult for TcpCheckResult {
-    fn into_tcp_check_result(self) -> TcpCheckResult {
-        self
-    }
-}
-
-// Original tcp.rs returns Result<(), String>.
-impl IntoTcpCheckResult for Result<(), String> {
-    fn into_tcp_check_result(self) -> TcpCheckResult {
-        match self {
-            Ok(()) => TcpCheckResult {
-                status: CheckStatus::Healthy,
-                response_time_ms: 0,
-            },
-            Err(e) => TcpCheckResult {
-                status: CheckStatus::Unhealthy(e),
-                response_time_ms: 0,
-            },
+impl Outcome {
+    fn new(result: CheckResult, status: &CheckStatus, response_time_ms: u128) -> Self {
+        let (healthy, error) = match status {
+            CheckStatus::Healthy => (true, None),
+            CheckStatus::Unhealthy(msg) => (false, Some(msg.clone())),
+        };
+        Self {
+            result,
+            healthy,
+            history_ms: Some(response_time_ms),
+            log_ms: response_time_ms,
+            error,
+            cert: None,
         }
     }
+
+    /// Wraps a `ServiceCheckResult` in the `CheckResult` variant given by `wrap`.
+    fn service(
+        svc: ServiceCheckResult,
+        wrap: impl FnOnce(ServiceCheckResult) -> CheckResult,
+    ) -> Self {
+        let (status, ms) = (svc.status.clone(), svc.response_time_ms);
+        Self::new(wrap(svc), &status, ms)
+    }
 }
 
-fn tcp_check_result_from<T: IntoTcpCheckResult>(t: T) -> TcpCheckResult {
-    t.into_tcp_check_result()
+/// Runs a single check of any type.
+async fn run_check(check: &Check, host: &str, interval_secs: u64) -> Outcome {
+    match check {
+        Check::Tcp(c) => {
+            let r = check_tcp_port(host, c.port, Duration::from_secs(c.timeout_seconds)).await;
+            let mut outcome =
+                Outcome::new(CheckResult::Tcp(r.clone()), &r.status, r.response_time_ms);
+            // TCP latency has never been written to the history; keep that behaviour.
+            outcome.history_ms = None;
+            outcome
+        }
+        Check::Http(c) => {
+            let r = check_http_target(host, c).await;
+            let mut outcome = Outcome::new(
+                CheckResult::Http(HttpCheckResultDetails {
+                    status: r.status.clone(),
+                    response_time_ms: r.response_time_ms,
+                    cert_days_remaining: r.cert_days_remaining,
+                    cert_is_valid: r.cert_is_valid,
+                }),
+                &r.status,
+                r.response_time_ms,
+            );
+            outcome.cert = Some((r.cert_days_remaining, r.cert_is_valid));
+            outcome
+        }
+        Check::Postgres(c) => {
+            Outcome::service(check_postgres(host, c).await, CheckResult::Postgres)
+        }
+        Check::Redis(c) => Outcome::service(check_redis(host, c).await, CheckResult::Redis),
+        Check::RabbitMQ(c) => {
+            Outcome::service(check_rabbitmq(host, c).await, CheckResult::RabbitMQ)
+        }
+        Check::Kafka(c) => Outcome::service(check_kafka(host, c).await, CheckResult::Kafka),
+        Check::MySQL(c) => Outcome::service(check_mysql(host, c).await, CheckResult::MySQL),
+        Check::MongoDB(c) => Outcome::service(check_mongodb(host, c).await, CheckResult::MongoDB),
+        Check::Elasticsearch(c) => Outcome::service(
+            check_elasticsearch(host, c).await,
+            CheckResult::Elasticsearch,
+        ),
+        Check::Ping(c) => protocol(ProtocolKind::Ping, check_ping(host, c).await),
+        Check::Dns(c) => protocol(ProtocolKind::Dns, check_dns(c).await),
+        Check::Push(c) => protocol(ProtocolKind::Push, check_push(c, interval_secs)),
+        Check::WebSocket(c) => protocol(ProtocolKind::WebSocket, check_websocket(host, c).await),
+        Check::Smtp(c) => protocol(ProtocolKind::Smtp, check_smtp(host, c).await),
+        Check::Ntp(c) => protocol(ProtocolKind::Ntp, check_ntp(host, c).await),
+        Check::Mqtt(c) => protocol(ProtocolKind::Mqtt, check_mqtt(host, c).await),
+        Check::Grpc(c) => protocol(ProtocolKind::Grpc, check_grpc(host, c).await),
+        Check::Snmp(c) => protocol(ProtocolKind::Snmp, check_snmp(host, c).await),
+        Check::Docker(c) => protocol(ProtocolKind::Docker, check_docker(c).await),
+    }
 }
 
-async fn update_service_status(
+fn protocol(kind: ProtocolKind, svc: ServiceCheckResult) -> Outcome {
+    Outcome::service(svc, |r| CheckResult::Protocol(kind, r))
+}
+
+/// Stores an outcome on the target's shared status and logs state changes.
+async fn record_outcome(
     shared_statuses: &Arc<Mutex<Vec<TargetStatus>>>,
     status_index: usize,
     alias: &str,
-    current_check_result: CheckResult,
-    is_healthy_now: bool,
+    host: &str,
     check_type: &str,
+    outcome: Outcome,
 ) {
-    let mut statuses = shared_statuses.lock().await;
-    if let Some(entry) = statuses.get_mut(status_index) {
-        entry.last_result = Some(current_check_result.clone());
-
-        let (response_time_ms, error_message) = match &current_check_result {
-            CheckResult::Postgres(r)
-            | CheckResult::Redis(r)
-            | CheckResult::RabbitMQ(r)
-            | CheckResult::Kafka(r)
-            | CheckResult::MySQL(r)
-            | CheckResult::MongoDB(r)
-            | CheckResult::Elasticsearch(r)
-            | CheckResult::Protocol(_, r) => {
-                let err = if !is_healthy_now {
-                    match &r.status {
-                        CheckStatus::Unhealthy(m) => Some(m.clone()),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-                (Some(r.response_time_ms), err)
-            }
-            _ => (None, None),
-        };
-
-        let failures_before = entry.consecutive_failures;
-
-        entry.add_check_result(is_healthy_now, response_time_ms, error_message);
-
-        if is_healthy_now {
-            if failures_before > 0 {
-                info!(
-                    "Target {} recovered after {} failures.",
-                    alias, failures_before
-                );
-            }
-        } else {
-            let reason = match &current_check_result {
-                CheckResult::Postgres(r)
-                | CheckResult::Redis(r)
-                | CheckResult::RabbitMQ(r)
-                | CheckResult::Kafka(r)
-                | CheckResult::MySQL(r)
-                | CheckResult::MongoDB(r)
-                | CheckResult::Elasticsearch(r)
-                | CheckResult::Protocol(_, r) => match &r.status {
-                    CheckStatus::Unhealthy(m) => m.clone(),
-                    _ => format!("Unknown {} error", check_type),
-                },
-                _ => format!("Unknown {} error", check_type),
-            };
-            warn!(
-                "Target {} UNHEALTHY. Reason: {}. Consecutive failures: {}. Type: {}",
-                alias, reason, entry.consecutive_failures, check_type
-            );
-        }
-        debug!(
-            "[{}] Healthy: {}, Consecutive Failures: {}",
-            alias, entry.is_healthy, entry.consecutive_failures
+    if outcome.healthy {
+        info!(
+            "Target {} ({}) is healthy. Response time: {}ms ({})",
+            alias, host, outcome.log_ms, check_type
         );
     }
+
+    let mut statuses = shared_statuses.lock().await;
+    let Some(entry) = statuses.get_mut(status_index) else {
+        return;
+    };
+
+    entry.last_result = Some(outcome.result);
+    if let Some((days_remaining, is_valid)) = outcome.cert {
+        entry.cert_days_remaining = days_remaining;
+        entry.cert_is_valid = is_valid;
+    }
+
+    let failures_before = entry.consecutive_failures;
+    entry.add_check_result(outcome.healthy, outcome.history_ms, outcome.error.clone());
+
+    if outcome.healthy {
+        if failures_before > 0 {
+            info!(
+                "Target {} recovered after {} failures.",
+                alias, failures_before
+            );
+        }
+    } else {
+        warn!(
+            "Target {} UNHEALTHY. Reason: {}. Consecutive failures: {}. Type: {}",
+            alias,
+            outcome.error.as_deref().unwrap_or("unknown error"),
+            entry.consecutive_failures,
+            check_type
+        );
+    }
+    debug!(
+        "[{}] Healthy: {}, Consecutive Failures: {}",
+        alias, entry.is_healthy, entry.consecutive_failures
+    );
 }

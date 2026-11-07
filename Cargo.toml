@@ -16,42 +16,40 @@ full = ["mongodb", "mysql", "kafka", "rabbitmq", "redis", "postgres"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "process"] }
-reqwest = { version = "0.11.0", features = ["json", "rustls-tls", "socks", "gzip", "brotli", "deflate"] }
-base64 = "0.22"
-http = "1"
-actix-web = "4.0.0"
-toml = "0.8.0"
-log = "0.4.0"
-env_logger = "0.11.0"
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "process"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "socks", "gzip", "brotli", "deflate"] }
+base64 = "0.23"
+http = "1.5"
+actix-web = "4.18"
+toml = "0.9"
+log = "0.4.35"
+env_logger = "0.11.11"
 native-tls = "0.2"
 openssl = { version = "0.10", features = ["vendored"] }
-prometheus = { version = "0.13.0", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json = "1.0"
 jsonpath_lib = "0.3"
-regex = "1.10"
-uuid = { version = "1.0", features = ["v4"] }
-xpath_reader = "0.5"
+regex = "1.13"
+uuid = { version = "1.29", features = ["v4"] }
 urlencoding = "2.1"
 
 # Protocol coverage / domain expiry
-hickory-resolver = "0.24"
-tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+hickory-resolver = "0.26"
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-psl = "2"
+psl = "2.1"
 
 # Optional DB/service dependencies
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"], optional = true }
-redis = { version = "0.26", features = ["tokio-comp"], optional = true }
-lapin = { version = "2.3", optional = true }
-rdkafka = { version = "0.36", features = ["cmake-build"], optional = true }
-mysql_async = { version = "0.32", optional = true }
-mongodb = { version = "2.8", optional = true }
+redis = { version = "1.8", features = ["tokio-comp"], optional = true }
+lapin = { version = "4.12", optional = true }
+rdkafka = { version = "0.39", features = ["cmake-build"], optional = true }
+mysql_async = { version = "0.37", optional = true }
+mongodb = { version = "3.10", optional = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.27"
 wiremock = "0.6"
-h2 = "0.3"
-http02 = { package = "http", version = "0.2" }
-bytes = "1"
+h2 = "0.4"
+bytes = "1.12"
